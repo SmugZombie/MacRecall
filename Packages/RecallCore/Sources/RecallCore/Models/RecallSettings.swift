@@ -24,11 +24,17 @@ public struct RecallSettings: Codable, Sendable, Equatable {
     public var sensitiveRules = SensitiveContentRules()
 
     // AI
+    public var aiProvider: AIProviderKind = .ollama
+    /// Model choices per provider, keyed by `AIProviderKind.rawValue`, so switching providers keeps each set.
+    public var providerModels: [String: ModelSelection] = [:]
     public var ollamaEndpoint = "http://127.0.0.1:11434"
-    public var remoteEndpointAcknowledged = false
-    public var visionModel = ""
-    public var summaryModel = ""
-    public var embeddingModel = ""
+    public var lmStudioEndpoint = OpenAICompatibleProvider.defaultLMStudioEndpoint
+    public var openAIEndpoint = OpenAICompatibleProvider.defaultOpenAIEndpoint
+    public var bedrockRegion = "us-east-1"
+    public var bedrockAuthMode: BedrockAuthMode = .apiKey
+    public var bedrockProfile = "default"
+    /// Remote AI destinations the user has explicitly approved (see `remoteTargetKey`).
+    public var acknowledgedRemoteTargets: [String] = []
     public var maxConcurrentRequests = 1
     public var requestTimeout: Double = 120
     public var aiProcessingEnabled = true
@@ -86,11 +92,31 @@ public struct RecallSettings: Codable, Sendable, Equatable {
         automaticCleanup = v(.automaticCleanup, d.automaticCleanup)
         redactionEnabled = v(.redactionEnabled, d.redactionEnabled)
         sensitiveRules = v(.sensitiveRules, d.sensitiveRules)
+        aiProvider = v(.aiProvider, d.aiProvider)
+        providerModels = v(.providerModels, d.providerModels)
         ollamaEndpoint = v(.ollamaEndpoint, d.ollamaEndpoint)
-        remoteEndpointAcknowledged = v(.remoteEndpointAcknowledged, d.remoteEndpointAcknowledged)
-        visionModel = v(.visionModel, d.visionModel)
-        summaryModel = v(.summaryModel, d.summaryModel)
-        embeddingModel = v(.embeddingModel, d.embeddingModel)
+        lmStudioEndpoint = v(.lmStudioEndpoint, d.lmStudioEndpoint)
+        openAIEndpoint = v(.openAIEndpoint, d.openAIEndpoint)
+        bedrockRegion = v(.bedrockRegion, d.bedrockRegion)
+        bedrockAuthMode = v(.bedrockAuthMode, d.bedrockAuthMode)
+        bedrockProfile = v(.bedrockProfile, d.bedrockProfile)
+        acknowledgedRemoteTargets = v(.acknowledgedRemoteTargets, d.acknowledgedRemoteTargets)
+        // Settings from before multi-provider support stored Ollama models and a single remote flag at the top level.
+        struct Legacy: Decodable {
+            var visionModel: String?
+            var summaryModel: String?
+            var embeddingModel: String?
+            var remoteEndpointAcknowledged: Bool?
+        }
+        if let legacy = try? Legacy(from: decoder) {
+            if providerModels[AIProviderKind.ollama.rawValue] == nil, legacy.visionModel != nil || legacy.summaryModel != nil || legacy.embeddingModel != nil {
+                providerModels[AIProviderKind.ollama.rawValue] = ModelSelection(
+                    vision: legacy.visionModel ?? "", summary: legacy.summaryModel ?? "", embedding: legacy.embeddingModel ?? "")
+            }
+            if legacy.remoteEndpointAcknowledged == true, aiProvider == .ollama, !acknowledgedRemoteTargets.contains(remoteTargetKey) {
+                acknowledgedRemoteTargets.append(remoteTargetKey)
+            }
+        }
         maxConcurrentRequests = v(.maxConcurrentRequests, d.maxConcurrentRequests)
         requestTimeout = v(.requestTimeout, d.requestTimeout)
         aiProcessingEnabled = v(.aiProcessingEnabled, d.aiProcessingEnabled)
@@ -112,9 +138,90 @@ public struct RecallSettings: Codable, Sendable, Equatable {
     }
 }
 
+public struct ModelSelection: Codable, Sendable, Equatable {
+    public var vision = ""
+    public var summary = ""
+    public var embedding = ""
+
+    public init(vision: String = "", summary: String = "", embedding: String = "") {
+        self.vision = vision
+        self.summary = summary
+        self.embedding = embedding
+    }
+}
+
+public enum BedrockAuthMode: String, Codable, Sendable, CaseIterable, Identifiable {
+    case apiKey, accessKeys, profile
+    public var id: String { rawValue }
+    public var displayName: String {
+        switch self {
+        case .apiKey: return "Bedrock API key"
+        case .accessKeys: return "Access keys"
+        case .profile: return "AWS profile"
+        }
+    }
+}
+
 extension RecallSettings {
-    /// True when the endpoint is not on this Mac — screenshots and text would leave the machine.
-    public var endpointIsRemote: Bool { !OllamaEndpoint.isLoopback(ollamaEndpoint) }
+    private var selection: ModelSelection {
+        get { providerModels[aiProvider.rawValue] ?? ModelSelection() }
+        set { providerModels[aiProvider.rawValue] = newValue }
+    }
+
+    /// Models for the active provider.
+    public var visionModel: String {
+        get { selection.vision }
+        set { selection.vision = newValue }
+    }
+    public var summaryModel: String {
+        get { selection.summary }
+        set { selection.summary = newValue }
+    }
+    public var embeddingModel: String {
+        get { selection.embedding }
+        set { selection.embedding = newValue }
+    }
+
+    /// Key under which embeddings are stored. Namespaced by provider so vectors from different
+    /// services never mix; Ollama keeps bare names for compatibility with existing indexes.
+    public var embeddingIndexKey: String {
+        guard !embeddingModel.isEmpty else { return "" }
+        return aiProvider == .ollama ? embeddingModel : "\(aiProvider.rawValue)/\(embeddingModel)"
+    }
+
+    /// Where AI requests go, in user-facing terms.
+    public var aiDestination: String {
+        switch aiProvider {
+        case .ollama: return ollamaEndpoint
+        case .lmStudio: return lmStudioEndpoint
+        case .openAI: return openAIEndpoint
+        case .bedrock: return "Amazon Bedrock (\(bedrockRegion))"
+        }
+    }
+
+    /// True when screenshots and text would leave this Mac.
+    public var providerIsRemote: Bool {
+        switch aiProvider {
+        case .ollama: return !OllamaEndpoint.isLoopback(ollamaEndpoint)
+        case .lmStudio: return !OllamaEndpoint.isLoopback(lmStudioEndpoint)
+        case .openAI, .bedrock: return true
+        }
+    }
+
+    public var remoteTargetKey: String { "\(aiProvider.rawValue)|\(aiDestination)" }
+
+    /// AI work may only be sent to a remote destination after the user explicitly approved it.
+    public var aiTransmissionAllowed: Bool { !providerIsRemote || acknowledgedRemoteTargets.contains(remoteTargetKey) }
+
+    public mutating func acknowledgeRemoteTarget() {
+        if !acknowledgedRemoteTargets.contains(remoteTargetKey) { acknowledgedRemoteTargets.append(remoteTargetKey) }
+    }
+
+    /// Settings that require rebuilding the provider client when changed.
+    public var providerConfiguration: [String] {
+        [aiProvider.rawValue, ollamaEndpoint, lmStudioEndpoint, openAIEndpoint, bedrockRegion, bedrockAuthMode.rawValue,
+         bedrockProfile, String(requestTimeout)]
+    }
 }
 
 public enum OllamaEndpoint {

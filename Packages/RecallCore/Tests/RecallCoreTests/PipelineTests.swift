@@ -37,7 +37,7 @@ import Testing
             imageHash: "", width: image.width, height: image.height))
         try store.enqueueJob(.ocr, entityType: "capture", entityID: capture.id)
 
-        let processor = JobProcessor(store: store, ollama: OllamaService(endpoint: "http://127.0.0.1:1"), settings: { settings })
+        let processor = JobProcessor(store: store, ai: OllamaProvider(endpoint: "http://127.0.0.1:1"), settings: { settings })
         let job = try #require(try store.claimJobs(types: [.ocr], limit: 1).first)
         try await processor.process(job)
         try store.completeJob(id: job.id)
@@ -59,7 +59,7 @@ import Testing
         #expect(sessions[0].captureCount == 2)
 
         // Keyword search through the hybrid path (no Ollama) finds it and filters by app.
-        let search = HybridSearch(store: store, ollama: nil, embeddingModel: "")
+        let search = HybridSearch(store: store, ai: nil, embeddingModel: "")
         let results = try await search.search("Find the terminal where I saw connection refused")
         #expect(results.captures.first?.capture.id == capture.id || results.captures.contains { $0.capture.id == capture.id })
         #expect(results.interpretation.applicationNames == ["Terminal"])
@@ -68,7 +68,7 @@ import Testing
 
         // Deterministic daily summary with grounded issue references.
         let key = DailySummaryService.dayKey(for: base)
-        let summary = try await DailySummaryService(store: store, ollama: nil, settings: { settings }).generate(dayKey: key)
+        let summary = try await DailySummaryService(store: store, ai: nil, settings: { settings }).generate(dayKey: key)
         #expect(summary.summary.contains("Terminal"))
         #expect(summary.summary.contains("[capture \(capture.id)]") || summary.summary.contains("[session"))
         #expect(!summary.summary.contains("Overview"))
@@ -85,10 +85,10 @@ import Testing
         settings.summaryModel = "llama3.2"
         let c = try addCapture(store, at: Date(), ocr: "hello")
         try store.enqueueJob(.visionAnalysis, entityType: "capture", entityID: c.id)
-        let processor = JobProcessor(store: store, ollama: OllamaService(endpoint: "http://127.0.0.1:1", timeout: 2), settings: { settings })
+        let processor = JobProcessor(store: store, ai: OllamaProvider(endpoint: "http://127.0.0.1:1", timeout: 2), settings: { settings })
         let job = try #require(try store.claimJobs(types: [.visionAnalysis], limit: 1).first)
-        await #expect(throws: OllamaError.self) { try await processor.process(job) }
-        do { try await processor.process(job) } catch let error as OllamaError {
+        await #expect(throws: AIProviderError.self) { try await processor.process(job) }
+        do { try await processor.process(job) } catch let error as AIProviderError {
             #expect(error.isOutage)
         }
         // Capture data is intact and still awaiting analysis.

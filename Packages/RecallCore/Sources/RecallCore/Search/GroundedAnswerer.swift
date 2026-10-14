@@ -21,12 +21,12 @@ public struct GroundedAnswer: Sendable {
 /// citations that don't correspond to supplied evidence are stripped, and an answer with no
 /// valid citations is reported as insufficient evidence.
 public struct GroundedAnswerer: Sendable {
-    let ollama: OllamaService
+    let ai: any AIProvider
     let model: String
     let rules: SensitiveContentRules?
 
-    public init(ollama: OllamaService, model: String, redactWith rules: SensitiveContentRules?) {
-        self.ollama = ollama
+    public init(ai: any AIProvider, model: String, redactWith rules: SensitiveContentRules?) {
+        self.ai = ai
         self.model = model
         self.rules = rules
     }
@@ -56,7 +56,7 @@ public struct GroundedAnswerer: Sendable {
         if let rules { evidenceText = rules.redact(evidenceText) }
         let now = f.string(from: Date())
 
-        let raw = try await ollama.chat(model: model, messages: [
+        let raw = try await ai.chat(model: model, messages: [
             ChatMessage(role: "system", content: """
                 You answer questions about the user's own computer activity history using ONLY the evidence records given.
                 \(Prompts.groundingRules)

@@ -57,17 +57,17 @@ struct SummariesView: View {
         guard let store = state.store else { return }
         generating = true
         let settings = state.settings
-        let ollama = state.queueStatus.ollamaReachable ? state.ollama : nil
+        let ai: (any AIProvider)? = state.queueStatus.providerReachable && settings.aiTransmissionAllowed ? state.ai : nil
         let key = dayKey
         state.updateSessions()
         Task {
             defer { generating = false }
             do {
-                summary = try await DailySummaryService(store: store, ollama: ollama, settings: { settings }).generate(dayKey: key)
+                summary = try await DailySummaryService(store: store, ai: ai, settings: { settings }).generate(dayKey: key)
             } catch {
                 // Fall back to the facts-only version if the model fails.
                 do {
-                    summary = try await DailySummaryService(store: store, ollama: nil, settings: { settings }).generate(dayKey: key)
+                    summary = try await DailySummaryService(store: store, ai: nil, settings: { settings }).generate(dayKey: key)
                     self.error = nil
                 } catch {
                     self.error = error.localizedDescription

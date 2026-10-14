@@ -5,9 +5,9 @@ import SwiftUI
 struct OnboardingView: View {
     @EnvironmentObject private var state: AppState
     @Environment(\.dismissWindow) private var dismissWindow
-    @State private var ollamaOK: Bool?
-    @State private var ollamaChecking = false
-    @State private var ollamaMessage: String?
+    @State private var aiOK: Bool?
+    @State private var aiChecking = false
+    @State private var aiMessage: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -34,14 +34,14 @@ struct OnboardingView: View {
                  granted: state.hasAccessibility,
                  action: ("Grant Access…", { state.requestAccessibility(); openPrivacyPane("Privacy_Accessibility") }))
 
-            step(title: "Ollama (optional)",
-                 detail: "Local AI for descriptions, summaries and semantic search. Capture, text recognition, the timeline and keyword search work without it.",
-                 granted: ollamaOK ?? false,
-                 action: (ollamaChecking ? "Checking…" : "Check Again", { Task { await checkOllama() } }))
-            if let ollamaMessage {
-                Text(ollamaMessage)
+            step(title: "AI provider (optional): \(state.settings.aiProvider.displayName)",
+                 detail: "Descriptions, summaries and semantic search, via Ollama or LM Studio on this Mac, or OpenAI / Amazon Bedrock in the cloud (change in Settings → AI). Capture, text recognition, the timeline and keyword search work without it.",
+                 granted: aiOK ?? false,
+                 action: (aiChecking ? "Checking…" : "Check Again", { Task { await checkAI() } }))
+            if let aiMessage {
+                Text(aiMessage)
                     .font(.caption)
-                    .foregroundStyle(ollamaOK == true ? Color.secondary : Color.orange)
+                    .foregroundStyle(aiOK == true ? Color.secondary : Color.orange)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.leading, 34)
@@ -64,7 +64,7 @@ struct OnboardingView: View {
         .padding(28)
         .frame(width: 560)
         .task {
-            await checkOllama()
+            await checkAI()
             // Permissions are granted in System Settings; poll while this window is open.
             while !Task.isCancelled {
                 state.refreshPermissions()
@@ -73,13 +73,13 @@ struct OnboardingView: View {
         }
     }
 
-    private func checkOllama() async {
-        guard !ollamaChecking else { return }
-        ollamaChecking = true
-        defer { ollamaChecking = false }
-        let result = await state.diagnoseOllama()
-        ollamaOK = result.ok
-        ollamaMessage = result.message
+    private func checkAI() async {
+        guard !aiChecking else { return }
+        aiChecking = true
+        defer { aiChecking = false }
+        let result = await state.diagnoseAI()
+        aiOK = result.ok
+        aiMessage = result.message
     }
 
     private func step(title: String, detail: String, granted: Bool, action: (String, () -> Void)) -> some View {

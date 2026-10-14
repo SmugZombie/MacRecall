@@ -13,10 +13,14 @@ struct QueueView: View {
                 stat("Running", q.counts.running)
                 stat("Failed", q.counts.failed)
                 VStack(alignment: .leading) {
-                    Label(q.ollamaReachable ? "Ollama connected" : "Ollama offline",
-                          systemImage: q.ollamaReachable ? "checkmark.circle.fill" : "xmark.circle")
-                        .foregroundStyle(q.ollamaReachable ? .green : .secondary)
-                    Text("AI jobs wait while Ollama is offline; OCR continues.").font(.caption).foregroundStyle(.secondary)
+                    let name = state.settings.aiProvider.displayName
+                    Label(q.providerReachable ? "\(name) connected" : "\(name) unavailable",
+                          systemImage: q.providerReachable ? "checkmark.circle.fill" : "xmark.circle")
+                        .foregroundStyle(q.providerReachable ? .green : .secondary)
+                    Text(state.settings.aiTransmissionAllowed
+                         ? "AI jobs wait while the provider is unavailable; OCR continues."
+                         : "AI jobs wait until you approve sending data to \(state.settings.aiDestination) in Settings → AI.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Toggle("AI processing", isOn: $state.settings.aiProcessingEnabled).toggleStyle(.switch)

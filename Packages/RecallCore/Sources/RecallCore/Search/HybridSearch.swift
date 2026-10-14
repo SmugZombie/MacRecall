@@ -28,14 +28,17 @@ public struct SearchResults: Sendable {
 /// Hybrid retrieval: interpret dates/apps → filter → FTS5 + vector search → reciprocal-rank fusion.
 public struct HybridSearch: Sendable {
     let store: RecallStore
-    let ollama: OllamaService?
+    let ai: (any AIProvider)?
     let vectorIndex: VectorIndex
     let embeddingModel: String
+    /// Key the vectors were stored under (provider-namespaced, see `RecallSettings.embeddingIndexKey`).
+    let embeddingKey: String
 
-    public init(store: RecallStore, ollama: OllamaService?, embeddingModel: String, vectorIndex: VectorIndex? = nil) {
+    public init(store: RecallStore, ai: (any AIProvider)?, embeddingModel: String, embeddingKey: String? = nil, vectorIndex: VectorIndex? = nil) {
         self.store = store
-        self.ollama = ollama
+        self.ai = ai
         self.embeddingModel = embeddingModel
+        self.embeddingKey = embeddingKey ?? embeddingModel
         self.vectorIndex = vectorIndex ?? ScanVectorIndex(store: store)
     }
 
@@ -117,10 +120,10 @@ public struct HybridSearch: Sendable {
     }
 
     private func semantic(_ query: String, scope: SearchScope) async throws -> [VectorHit] {
-        guard let ollama, !embeddingModel.isEmpty, try store.embeddingCount(model: embeddingModel) > 0 else { return [] }
-        guard let vector = try? await ollama.embed(model: embeddingModel, inputs: [query]).first else { return [] }
+        guard let ai, !embeddingModel.isEmpty, try store.embeddingCount(model: embeddingKey) > 0 else { return [] }
+        guard let vector = try? await ai.embed(model: embeddingModel, inputs: [query], purpose: .query).first else { return [] }
         let range = scope.range ?? DateInterval(start: .distantPast, end: .distantFuture)
-        var hits = try vectorIndex.search(query: vector, model: embeddingModel, entityTypes: ["capture", "session"],
+        var hits = try vectorIndex.search(query: vector, model: embeddingKey, entityTypes: ["capture", "session"],
                                           from: range.start, to: range.end, limit: 80)
         // Drop weak matches: cosine below this is mostly noise for typical embedding models.
         hits = hits.filter { $0.score >= 0.3 }

@@ -201,109 +201,257 @@ private struct PrivacySettings: View {
 private struct AISettings: View {
     @EnvironmentObject private var state: AppState
     @State private var endpoint = ""
-    @State private var models: [OllamaModel] = []
-    @State private var capabilities: [String: [String]] = [:]
-    @State private var connection: String?
+    @State private var apiKey = ""
+    @State private var region = ""
+    @State private var authMode: BedrockAuthMode = .apiKey
+    @State private var accessKeyID = ""
+    @State private var secretAccessKey = ""
+    @State private var sessionToken = ""
+    @State private var profile = ""
+    @State private var models: [AIModel] = []
+    @State private var connection: (ok: Bool, message: String)?
     @State private var testing = false
-    @State private var confirmRemote = false
+    @State private var confirmReembed = false
+
+    private var provider: AIProviderKind { state.settings.aiProvider }
 
     var body: some View {
         Form {
-            Section("Ollama server") {
-                HStack {
-                    TextField("Endpoint", text: $endpoint).onSubmit { apply() }
-                    Button("Apply") { apply() }.disabled(endpoint == state.settings.ollamaEndpoint)
-                    Button("Test") { Task { await test() } }.disabled(testing)
+            Section {
+                Picker("Provider", selection: $state.settings.aiProvider) {
+                    ForEach(AIProviderKind.allCases) { Text($0.displayName).tag($0) }
                 }
-                if let connection { Text(connection).font(.caption).foregroundStyle(.secondary) }
-                if state.settings.endpointIsRemote {
-                    Label("Screenshots and recognized text are sent to \(state.settings.ollamaEndpoint), which is not this Mac.",
-                          systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption).foregroundStyle(.orange)
-                }
+                Text(providerBlurb).font(.caption).foregroundStyle(.secondary)
             }
-            Section("Models") {
-                modelPicker("Vision", selection: $state.settings.visionModel, capability: "vision",
-                            help: "Describes screenshots. Without one, the summary model analyzes recognized text only.")
-                modelPicker("Summary", selection: $state.settings.summaryModel, capability: "completion",
-                            help: "Session titles, daily overviews and answers to questions.")
-                modelPicker("Embedding", selection: $state.settings.embeddingModel, capability: "embedding",
-                            help: "Semantic search. Changing it requires re-embedding history.")
-                if models.isEmpty {
-                    Text("No models found. Install one with e.g. `ollama pull qwen2.5vl` — Recall never downloads models itself.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-            }
+            if state.settings.providerIsRemote { approvalSection }
+            connectionSection
+            modelsSection
             Section("Processing") {
                 Toggle("Background AI processing", isOn: $state.settings.aiProcessingEnabled)
                 Stepper("Concurrent requests: \(state.settings.maxConcurrentRequests)", value: $state.settings.maxConcurrentRequests, in: 1...8)
                 Stepper("Request timeout: \(Int(state.settings.requestTimeout)) s", value: $state.settings.requestTimeout, in: 10...900, step: 10)
-                Button("Reprocess Pending and Failed Screenshots") { state.reprocessPending() }
+                HStack {
+                    Button("Reprocess Pending and Failed Screenshots") { state.reprocessPending() }
+                    Button("Re-embed History…") { confirmReembed = true }.disabled(state.settings.embeddingModel.isEmpty)
+                }
             }
         }
         .formStyle(.grouped)
-        .onAppear {
-            endpoint = state.settings.ollamaEndpoint
-            Task { await test() }
-        }
-        .alert("Use a remote Ollama server?", isPresented: $confirmRemote) {
-            Button("Use Remote Server", role: .destructive) {
-                state.settings.remoteEndpointAcknowledged = true
-                state.settings.ollamaEndpoint = endpoint
-                Task { await test() }
-            }
-            Button("Cancel", role: .cancel) { endpoint = state.settings.ollamaEndpoint }
+        .onAppear { loadDrafts(); Task { await test() } }
+        .onChange(of: state.settings.aiProvider) { loadDrafts(); models = []; connection = nil; Task { await test() } }
+        .confirmationDialog("Re-embed all history?", isPresented: $confirmReembed) {
+            Button("Re-embed") { state.rebuildEmbeddings() }
         } message: {
-            Text("\(endpoint) is not on this Mac. Screenshots, recognized text and activity summaries will be sent to it over the network. Only use a server you control, ideally over an encrypted connection.")
+            Text("Every screenshot and session is embedded again with \(state.settings.embeddingModel) for semantic search."
+                 + (provider.isCloud ? " With a cloud provider this sends all recognized text to \(provider.displayName) and incurs usage costs." : ""))
         }
     }
 
-    private func modelPicker(_ title: String, selection: Binding<String>, capability: String, help: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Picker(title, selection: selection) {
-                Text("None").tag("")
-                ForEach(models) { model in
-                    let caps = capabilities[model.name] ?? []
-                    let suitable = caps.isEmpty || caps.contains(capability)
-                    Text(model.name + (suitable ? "" : "  (no \(capability))")).tag(model.name)
+    private var providerBlurb: String {
+        switch provider {
+        case .ollama: return "Runs models locally with Ollama (ollama.com)."
+        case .lmStudio: return "Runs models locally with LM Studio's OpenAI-compatible server (Developer tab → Start Server)."
+        case .openAI: return "OpenAI's API, or any OpenAI-compatible service via a custom base URL. Requires an API key."
+        case .bedrock: return "Amazon Bedrock in your AWS account. Authenticate with a Bedrock API key, IAM access keys, or an AWS CLI profile (including SSO)."
+        }
+    }
+
+    // MARK: Remote approval
+
+    private var approvalSection: some View {
+        Section {
+            if state.settings.aiTransmissionAllowed {
+                Label("Screenshots and recognized text are sent to \(state.settings.aiDestination).", systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Button("Revoke Approval") {
+                    state.settings.acknowledgedRemoteTargets.removeAll { $0 == state.settings.remoteTargetKey }
                 }
-                if !selection.wrappedValue.isEmpty && !models.contains(where: { $0.name == selection.wrappedValue }) {
-                    Text("\(selection.wrappedValue) (not installed)").tag(selection.wrappedValue)
+            } else {
+                Label("AI is paused until you approve this destination.", systemImage: "hand.raised.fill").foregroundStyle(.orange)
+                Text("Using \(provider.displayName) sends screenshots, recognized text and activity summaries to \(state.settings.aiDestination), outside this Mac. "
+                     + (provider.isCloud ? "Each analyzed screenshot is a billable request — with capture every \(Int(state.settings.captureInterval)) s that can add up. " : "")
+                     + "Redaction rules apply to text before it is sent, but can't catch everything in images.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Button("Allow Sending Data to \(provider.displayName)") { state.settings.acknowledgeRemoteTarget() }
+            }
+        } header: { Text("Data leaves this Mac") }
+    }
+
+    // MARK: Connection
+
+    @ViewBuilder private var connectionSection: some View {
+        Section("Connection") {
+            switch provider {
+            case .ollama:
+                TextField("Endpoint", text: $endpoint, prompt: Text("http://127.0.0.1:11434"))
+            case .lmStudio:
+                TextField("Endpoint", text: $endpoint, prompt: Text(OpenAICompatibleProvider.defaultLMStudioEndpoint))
+                SecureField("API key (optional)", text: $apiKey)
+            case .openAI:
+                TextField("Base URL", text: $endpoint, prompt: Text(OpenAICompatibleProvider.defaultOpenAIEndpoint))
+                SecureField("API key", text: $apiKey, prompt: Text("sk-…"))
+            case .bedrock:
+                TextField("Region", text: $region, prompt: Text("us-east-1"))
+                Picker("Authentication", selection: $authMode) {
+                    ForEach(BedrockAuthMode.allCases) { Text($0.displayName).tag($0) }
+                }
+                switch authMode {
+                case .apiKey:
+                    SecureField("Bedrock API key", text: $apiKey)
+                case .accessKeys:
+                    TextField("Access key ID", text: $accessKeyID, prompt: Text("AKIA…"))
+                    SecureField("Secret access key", text: $secretAccessKey)
+                    SecureField("Session token (optional)", text: $sessionToken)
+                case .profile:
+                    TextField("Profile", text: $profile, prompt: Text("default"))
+                    Text("Static keys are read from ~/.aws/credentials. SSO and other profile types are resolved with the AWS CLI (`aws configure export-credentials`), so sign in with the CLI first.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
-            Text(help).font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Button("Save & Test") { apply() }.keyboardShortcut(.defaultAction)
+                if testing { ProgressView().controlSize(.small) }
+                Spacer()
+            }
+            if let connection {
+                Text(connection.message)
+                    .font(.caption)
+                    .foregroundStyle(connection.ok ? Color.secondary : Color.orange)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if provider.isCloud || provider == .lmStudio {
+                Text("Keys are stored in your login keychain.").font(.caption2).foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    // MARK: Models
+
+    private var modelsSection: some View {
+        Section("Models") {
+            ModelField(title: "Vision", selection: $state.settings.visionModel, models: models, capability: .vision,
+                       help: "Describes screenshots. Without one, the summary model analyzes recognized text only.")
+            ModelField(title: "Summary", selection: $state.settings.summaryModel, models: models, capability: .completion,
+                       help: "Session titles, daily overviews and answers to questions.")
+            ModelField(title: "Embedding", selection: $state.settings.embeddingModel, models: models, capability: .embedding,
+                       help: "Semantic search. After changing it, re-embed history so older activity is searchable.")
+            Text(modelHint).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var modelHint: String {
+        switch provider {
+        case .ollama: return "Install models with e.g. `ollama pull qwen2.5vl`, `ollama pull llama3.2`, `ollama pull nomic-embed-text`. Recall never downloads models itself."
+        case .lmStudio: return "Download models in LM Studio. A vision-capable (VLM) model can serve as both vision and summary model."
+        case .openAI: return "A vision-capable chat model can serve as both vision and summary model; use a text-embedding model for search."
+        case .bedrock: return "Many current models must be invoked through an inference profile ID (e.g. one starting with “us.” or “global.”). Embeddings support Amazon Titan Text Embeddings and Cohere Embed. Model access must be enabled in the Bedrock console."
+        }
+    }
+
+    // MARK: Actions
+
+    private func loadDrafts() {
+        let s = state.settings
+        switch s.aiProvider {
+        case .ollama: endpoint = s.ollamaEndpoint; apiKey = ""
+        case .lmStudio: endpoint = s.lmStudioEndpoint; apiKey = Keychain.get(.lmStudioAPIKey) ?? ""
+        case .openAI: endpoint = s.openAIEndpoint; apiKey = Keychain.get(.openAIAPIKey) ?? ""
+        case .bedrock:
+            region = s.bedrockRegion
+            authMode = s.bedrockAuthMode
+            profile = s.bedrockProfile
+            apiKey = Keychain.get(.bedrockAPIKey) ?? ""
+            accessKeyID = Keychain.get(.awsAccessKeyID) ?? ""
+            secretAccessKey = Keychain.get(.awsSecretAccessKey) ?? ""
+            sessionToken = Keychain.get(.awsSessionToken) ?? ""
         }
     }
 
     private func apply() {
-        let trimmed = endpoint.trimmingCharacters(in: .whitespaces)
-        guard let url = URL(string: trimmed), url.scheme == "http" || url.scheme == "https", url.host != nil else {
-            connection = "Enter a URL such as http://127.0.0.1:11434"
-            return
+        let trimmedEndpoint = endpoint.trimmingCharacters(in: .whitespaces)
+        if provider != .bedrock {
+            guard let url = URL(string: trimmedEndpoint), url.scheme == "http" || url.scheme == "https", url.host != nil else {
+                connection = (false, "Enter a full URL, e.g. \(provider == .ollama ? "http://127.0.0.1:11434" : OpenAICompatibleProvider.defaultLMStudioEndpoint)")
+                return
+            }
         }
-        endpoint = trimmed
-        if !OllamaEndpoint.isLoopback(trimmed) {
-            confirmRemote = true
-        } else {
-            state.settings.ollamaEndpoint = trimmed
-            Task { await test() }
+        let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch provider {
+        case .ollama:
+            state.settings.ollamaEndpoint = trimmedEndpoint
+        case .lmStudio:
+            state.settings.lmStudioEndpoint = trimmedEndpoint
+            Keychain.set(key, for: .lmStudioAPIKey)
+        case .openAI:
+            state.settings.openAIEndpoint = trimmedEndpoint
+            Keychain.set(key, for: .openAIAPIKey)
+        case .bedrock:
+            state.settings.bedrockRegion = region.trimmingCharacters(in: .whitespaces).isEmpty ? "us-east-1" : region.trimmingCharacters(in: .whitespaces)
+            state.settings.bedrockAuthMode = authMode
+            state.settings.bedrockProfile = profile.trimmingCharacters(in: .whitespaces).isEmpty ? "default" : profile.trimmingCharacters(in: .whitespaces)
+            switch authMode {
+            case .apiKey: Keychain.set(key, for: .bedrockAPIKey)
+            case .accessKeys:
+                Keychain.set(accessKeyID.trimmingCharacters(in: .whitespacesAndNewlines), for: .awsAccessKeyID)
+                Keychain.set(secretAccessKey.trimmingCharacters(in: .whitespacesAndNewlines), for: .awsSecretAccessKey)
+                Keychain.set(sessionToken.trimmingCharacters(in: .whitespacesAndNewlines), for: .awsSessionToken)
+            case .profile: break
+            }
         }
+        state.credentialsChanged()
+        Task { await test() }
     }
 
     private func test() async {
         testing = true
         defer { testing = false }
-        do {
-            models = try await state.ollama.listModels()
-            for model in models {
-                capabilities[model.name] = (try? await state.ollama.capabilities(of: model.name)) ?? []
+        models = (try? await state.ai.listModels()) ?? []
+        connection = await state.diagnoseAI()
+    }
+}
+
+/// Free-text model ID with a menu of discovered models. Free text matters for Bedrock and OpenAI,
+/// where credentials may not allow listing or the list may not include every usable ID.
+private struct ModelField: View {
+    let title: String
+    @Binding var selection: String
+    let models: [AIModel]
+    let capability: ModelCapability
+    let help: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack {
+                TextField(title, text: $selection, prompt: Text("None"))
+                Menu {
+                    Button("None") { selection = "" }
+                    let suited = models.filter { $0.supports(capability) != false }
+                    let others = models.filter { $0.supports(capability) == false }
+                    if !suited.isEmpty { Divider() }
+                    ForEach(suited) { model in Button(label(model)) { selection = model.name } }
+                    if !others.isEmpty {
+                        Menu("Other models") {
+                            ForEach(others) { model in Button(label(model)) { selection = model.name } }
+                        }
+                    }
+                } label: { Image(systemName: "list.bullet") }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .disabled(models.isEmpty)
+                .help(models.isEmpty ? "No models discovered — type a model ID" : "Choose a discovered model")
             }
-            connection = "Connected to \(state.settings.ollamaEndpoint) — \(models.count) models"
-        } catch {
-            models = []
-            connection = error.localizedDescription
+            if let model = models.first(where: { $0.name == selection }), model.supports(capability) == false {
+                Text("\(selection) doesn't report \(capability.rawValue) support.").font(.caption).foregroundStyle(.orange)
+            }
+            Text(help).font(.caption).foregroundStyle(.secondary)
         }
-        _ = await state.checkOllama()
+    }
+
+    private func label(_ model: AIModel) -> String {
+        var text = model.displayName.map { "\($0) — \(model.name)" } ?? model.name
+        if let detail = model.detail { text += " (\(detail))" }
+        return text
     }
 }
 
@@ -375,7 +523,7 @@ private struct GeneralSettings: View {
                 Button("Open Permission Setup…") { activateApp(); openWindow(id: WindowID.onboarding) }
             }
             Section {
-                Text("Recall stores everything locally in ~/Library/Application Support/RecallForMac. It has no telemetry, accounts or cloud sync; the only network traffic is to the Ollama server you configure.")
+                Text("Recall stores everything locally in ~/Library/Application Support/RecallForMac. It has no telemetry, accounts or cloud sync; the only network traffic is to the AI provider you configure, and remote providers require your approval first.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }

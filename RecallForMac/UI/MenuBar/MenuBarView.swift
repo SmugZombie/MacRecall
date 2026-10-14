@@ -102,14 +102,15 @@ struct MenuBarView: View {
     private var aiTitle: String {
         let q = state.queueStatus
         if q.aiPaused { return "AI processing paused" }
-        if !q.ollamaReachable { return "AI unavailable (Ollama offline)" }
+        if !state.settings.aiTransmissionAllowed { return "AI waiting for approval (Settings → AI)" }
+        if !q.providerReachable { return "AI unavailable (\(state.settings.aiProvider.displayName) offline)" }
         if q.counts.pending > 50 { return "AI backlog" }
         return "AI ready"
     }
-    private var aiSymbol: String { state.queueStatus.ollamaReachable && !state.queueStatus.aiPaused ? "sparkles" : "sparkles.slash" }
+    private var aiSymbol: String { state.queueStatus.providerReachable && !state.queueStatus.aiPaused && state.settings.aiTransmissionAllowed ? "sparkles" : "sparkles.slash" }
     private var aiColor: Color {
         let q = state.queueStatus
-        if q.aiPaused || !q.ollamaReachable { return .secondary }
+        if q.aiPaused || !q.providerReachable || !state.settings.aiTransmissionAllowed { return .secondary }
         return q.counts.pending > 50 ? .orange : .accentColor
     }
 }

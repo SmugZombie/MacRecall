@@ -3,12 +3,12 @@ import Foundation
 /// Executes individual jobs. Stateless apart from its dependencies; the queue handles scheduling.
 public struct JobProcessor: Sendable {
     public let store: RecallStore
-    public let ollama: OllamaService
+    public let ai: any AIProvider
     public let settings: @Sendable () -> RecallSettings
 
-    public init(store: RecallStore, ollama: OllamaService, settings: @escaping @Sendable () -> RecallSettings) {
+    public init(store: RecallStore, ai: any AIProvider, settings: @escaping @Sendable () -> RecallSettings) {
         self.store = store
-        self.ollama = ollama
+        self.ai = ai
         self.settings = settings
     }
 
@@ -22,10 +22,10 @@ public struct JobProcessor: Sendable {
         case (.projectAssociation, "session"): try associateSession(job.entityID)
         case (.sessionSummary, "session"): try await summarizeSession(job.entityID)
         case (.dailySummary, "day"):
-            let service = DailySummaryService(store: store, ollama: ollama, settings: settings)
+            let service = DailySummaryService(store: store, ai: ai, settings: settings)
             _ = try await service.generate(dayKey: job.entityID)
         default:
-            throw OllamaError.invalidResponse("unsupported job \(job.type.rawValue)/\(job.entityType)")
+            throw AIProviderError.invalidResponse("unsupported job \(job.type.rawValue)/\(job.entityType)")
         }
     }
 
@@ -63,7 +63,7 @@ public struct JobProcessor: Sendable {
             try store.setAIStatus(captureID: captureID, .skipped)
             return
         }
-        try await ollama.validate(model: model, role: useVision ? "vision" : "summary")
+        try await ai.validate(model: model, role: useVision ? "vision" : "summary")
         try store.setAIStatus(captureID: captureID, .running)
 
         let previous = try store.captures(from: capture.capturedAt.addingTimeInterval(-15 * 60), to: capture.capturedAt, limit: 3)
@@ -80,14 +80,14 @@ public struct JobProcessor: Sendable {
             images = [try ImageProcessing.jpegForModel(store.paths.absolute(capture.imagePath))]
         }
         do {
-            let raw = try await ollama.chat(model: model, messages: [
+            let raw = try await ai.chat(model: model, messages: [
                 ChatMessage(role: "system", content: Prompts.visionSystem()),
                 ChatMessage(role: "user", content: user, images: images),
             ], schema: ActivityAnalysis.schema)
             let analysis = try ActivityAnalysis.parse(raw)
             let json = String(data: try JSONEncoder().encode(analysis), encoding: .utf8)
             try store.updateAI(captureID: captureID, description: analysis.searchableText, json: json, status: .done)
-        } catch let error as OllamaError where !error.isOutage {
+        } catch let error as AIProviderError where !error.isOutage {
             try store.setAIStatus(captureID: captureID, error.isTransient ? .pending : .failed)
             throw error
         } catch {
@@ -106,22 +106,26 @@ public struct JobProcessor: Sendable {
     }
 
     func embedCapture(_ id: Int64) async throws {
-        let model = settings().embeddingModel
+        let s = settings()
+        let model = s.embeddingModel
         guard !model.isEmpty, let capture = try store.capture(id: id) else { return }
-        let text = Self.captureEmbeddingText(capture)
+        // Redaction applies to everything sent to a provider, not just stored text.
+        let raw = Self.captureEmbeddingText(capture)
+        let text = s.redactionEnabled ? s.sensitiveRules.redact(raw) : raw
         guard text.count > 3 else { return }
-        let vector = try await ollama.embed(model: model, inputs: [text])[0]
-        try store.saveEmbedding(entityType: "capture", entityID: id, model: model, vector: VectorMath.normalized(vector),
+        let vector = try await ai.embed(model: model, inputs: [text])[0]
+        try store.saveEmbedding(entityType: "capture", entityID: id, model: s.embeddingIndexKey, vector: VectorMath.normalized(vector),
                                 entityTime: capture.capturedAt)
     }
 
     func embedSession(_ id: Int64) async throws {
-        let model = settings().embeddingModel
+        let s = settings()
+        let model = s.embeddingModel
         guard !model.isEmpty, let session = try store.session(id: id) else { return }
         let text = [session.title, session.summary, session.projectName ?? "", session.applicationNames.joined(separator: ", ")]
             .filter { !$0.isEmpty }.joined(separator: "\n")
-        let vector = try await ollama.embed(model: model, inputs: [text])[0]
-        try store.saveEmbedding(entityType: "session", entityID: id, model: model, vector: VectorMath.normalized(vector),
+        let vector = try await ai.embed(model: model, inputs: [text])[0]
+        try store.saveEmbedding(entityType: "session", entityID: id, model: s.embeddingIndexKey, vector: VectorMath.normalized(vector),
                                 entityTime: session.startedAt)
     }
 
@@ -171,7 +175,7 @@ public struct JobProcessor: Sendable {
     func summarizeSession(_ id: Int64) async throws {
         let model = settings().summaryModel
         guard !model.isEmpty, let session = try store.session(id: id) else { return }
-        try await ollama.validate(model: model, role: "summary")
+        try await ai.validate(model: model, role: "summary")
         let captures = try store.captures(inSession: id)
         guard !captures.isEmpty else { return }
         let sampled = Self.sample(captures, max: 40)
@@ -187,7 +191,7 @@ public struct JobProcessor: Sendable {
         Observations:
         \(body)
         """
-        let raw = try await ollama.chat(model: model, messages: [
+        let raw = try await ai.chat(model: model, messages: [
             ChatMessage(role: "system", content: Prompts.sessionSystem()),
             ChatMessage(role: "user", content: user),
         ], schema: SessionAnalysis.schema)

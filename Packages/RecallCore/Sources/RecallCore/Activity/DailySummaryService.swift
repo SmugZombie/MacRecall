@@ -7,12 +7,12 @@ import Foundation
 /// those facts and clearly labelled as AI-written.
 public struct DailySummaryService: Sendable {
     let store: RecallStore
-    let ollama: OllamaService?
+    let ai: (any AIProvider)?
     let settings: @Sendable () -> RecallSettings
 
-    public init(store: RecallStore, ollama: OllamaService?, settings: @escaping @Sendable () -> RecallSettings) {
+    public init(store: RecallStore, ai: (any AIProvider)?, settings: @escaping @Sendable () -> RecallSettings) {
         self.store = store
-        self.ollama = ollama
+        self.ai = ai
         self.settings = settings
     }
 
@@ -128,10 +128,10 @@ public struct DailySummaryService: Sendable {
         let facts = try facts(for: key)
         var narrative: String?
         let s = settings()
-        if let ollama, !s.summaryModel.isEmpty, facts.captureCount > 0 {
+        if let ai, !s.summaryModel.isEmpty, facts.captureCount > 0 {
             let factsText = markdown(for: key, facts: facts, narrative: nil)
             let redacted = s.redactionEnabled ? s.sensitiveRules.redact(factsText) : factsText
-            narrative = try await ollama.chat(model: s.summaryModel, messages: [
+            narrative = try await ai.chat(model: s.summaryModel, messages: [
                 ChatMessage(role: "system", content: """
                     You write a 2–4 sentence overview of a person's workday using ONLY the facts provided.
                     \(Prompts.groundingRules)

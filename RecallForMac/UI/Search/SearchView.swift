@@ -43,8 +43,10 @@ struct SearchView: View {
                 Toggle("Exact", isOn: $exact).toggleStyle(.checkbox).help("Require every word (keyword search only)")
                     .onChange(of: exact) { runSearch() }
                 Button("Ask") { ask() }
-                    .disabled(query.isEmpty || state.settings.summaryModel.isEmpty || answering)
-                    .help(state.settings.summaryModel.isEmpty ? "Select a summary model in Settings → AI to ask questions" : "Answer using only your captured history")
+                    .disabled(query.isEmpty || state.settings.summaryModel.isEmpty || !state.settings.aiTransmissionAllowed || answering)
+                    .help(state.settings.summaryModel.isEmpty ? "Select a summary model in Settings → AI to ask questions"
+                          : !state.settings.aiTransmissionAllowed ? "Approve the AI provider in Settings → AI first"
+                          : "Answer using only your captured history")
             }
             if let r = results {
                 HStack(spacing: 6) {
@@ -157,8 +159,9 @@ struct SearchView: View {
         guard !q.isEmpty else { results = nil; return }
         searching = true
         defer { searching = false }
-        let reachable = state.queueStatus.ollamaReachable
-        let search = HybridSearch(store: store, ollama: reachable ? state.ollama : nil, embeddingModel: state.settings.embeddingModel)
+        let s = state.settings
+        let usable = state.queueStatus.providerReachable && s.aiTransmissionAllowed
+        let search = HybridSearch(store: store, ai: usable ? state.ai : nil, embeddingModel: s.embeddingModel, embeddingKey: s.embeddingIndexKey)
         do {
             let r = try await search.search(q, projectID: projectID, exact: exact)
             if !Task.isCancelled { results = r; error = nil }
@@ -176,7 +179,7 @@ struct SearchView: View {
             defer { answering = false }
             if results == nil { await performSearch() }
             guard let results else { return }
-            let answerer = GroundedAnswerer(ollama: state.ollama, model: s.summaryModel, redactWith: s.redactionEnabled ? s.sensitiveRules : nil)
+            let answerer = GroundedAnswerer(ai: state.ai, model: s.summaryModel, redactWith: s.redactionEnabled ? s.sensitiveRules : nil)
             do {
                 answer = try await answerer.answer(question: q, results: results)
             } catch {

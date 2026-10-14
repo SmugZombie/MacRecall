@@ -3,19 +3,19 @@ import os
 
 public struct QueueStatus: Sendable, Equatable {
     public var counts = QueueCounts()
-    public var ollamaReachable = false
+    public var providerReachable = false
     public var aiPaused = false
     public var lastError: String?
     public init() {}
 }
 
 /// Durable background queue. Jobs live in SQLite, so they survive restarts; this actor only
-/// schedules workers. OCR and project association run without Ollama; AI jobs wait while
-/// Ollama is offline, paused, or unconfigured, without consuming retry attempts.
+/// schedules workers. OCR and project association run without a provider; AI jobs wait while
+/// the AI provider is offline, paused, unapproved or unconfigured, without consuming retry attempts.
 public actor AIJobQueue {
     private let store: RecallStore
     private let processor: JobProcessor
-    private let ollama: OllamaService
+    private let ai: any AIProvider
     private let settings: @Sendable () -> RecallSettings
     private let log = Logger(subsystem: "RecallForMac", category: "jobs")
 
@@ -27,11 +27,11 @@ public actor AIJobQueue {
 
     public var onStatus: (@Sendable (QueueStatus) -> Void)?
 
-    public init(store: RecallStore, ollama: OllamaService, settings: @escaping @Sendable () -> RecallSettings) {
+    public init(store: RecallStore, ai: any AIProvider, settings: @escaping @Sendable () -> RecallSettings) {
         self.store = store
-        self.ollama = ollama
+        self.ai = ai
         self.settings = settings
-        self.processor = JobProcessor(store: store, ollama: ollama, settings: settings)
+        self.processor = JobProcessor(store: store, ai: ai, settings: settings)
     }
 
     public func setOnStatus(_ handler: (@Sendable (QueueStatus) -> Void)?) { onStatus = handler }
@@ -41,13 +41,13 @@ public actor AIJobQueue {
         if let n = try? store.recoverInterruptedJobs(), n > 0 { log.info("Recovered \(n) interrupted jobs") }
         let s = settings()
         aiPaused = !s.aiProcessingEnabled
-        // Local work (OCR, project rules): two workers. Ollama work: bounded by the user's concurrency limit.
+        // Local work (OCR, project rules): two workers. AI provider work: bounded by the user's concurrency limit.
         for _ in 0..<2 { workers.append(Task { [weak self] in await self?.workerLoop(ai: false) }) }
         for _ in 0..<s.maxConcurrentRequests { workers.append(Task { [weak self] in await self?.workerLoop(ai: true) }) }
         healthTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.checkHealth()
-                let reachable = await self?.status.ollamaReachable ?? false
+                let reachable = await self?.status.providerReachable ?? false
                 try? await Task.sleep(for: .seconds(reachable ? 60 : 20))
             }
         }
@@ -74,10 +74,10 @@ public actor AIJobQueue {
     }
 
     public func checkHealth() async {
-        let reachable = await ollama.ping()
-        if reachable != status.ollamaReachable {
-            log.info("Ollama reachable: \(reachable)")
-            status.ollamaReachable = reachable
+        let reachable = await ai.ping()
+        if reachable != status.providerReachable {
+            log.info("AI provider reachable: \(reachable)")
+            status.providerReachable = reachable
             if reachable { wake() }
         }
         publish()
@@ -97,8 +97,9 @@ public actor AIJobQueue {
 
     /// Job types an AI worker may claim right now, given configured models.
     private func allowedAITypes() -> Set<JobType> {
-        guard !aiPaused, status.ollamaReachable else { return [] }
         let s = settings()
+        // Nothing goes to a remote provider until the user has approved that destination.
+        guard !aiPaused, status.providerReachable, s.aiTransmissionAllowed else { return [] }
         var types: Set<JobType> = []
         if !s.visionModel.isEmpty || !s.summaryModel.isEmpty { types.insert(.visionAnalysis) }
         if !s.embeddingModel.isEmpty { types.insert(.embedding) }
@@ -132,11 +133,11 @@ public actor AIJobQueue {
         do {
             try await processor.process(job)
             try? store.completeJob(id: job.id)
-        } catch let error as OllamaError where error.isOutage {
+        } catch let error as AIProviderError where error.isOutage {
             // Server down: put the job back without spending an attempt and stop claiming AI work.
-            status.ollamaReachable = false
+            status.providerReachable = false
             try? store.deferJob(id: job.id, until: Date().addingTimeInterval(30))
-        } catch let error as OllamaError {
+        } catch let error as AIProviderError {
             status.lastError = error.localizedDescription
             _ = try? store.failJob(id: job.id, error: error.localizedDescription, retryable: error.isTransient)
         } catch {

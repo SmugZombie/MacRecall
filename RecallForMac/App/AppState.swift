@@ -38,7 +38,8 @@ final class AppState: ObservableObject {
 
     let store: RecallStore?
     let startupError: String?
-    let ollama: OllamaService
+    /// The configured AI provider; its implementation is swapped in place when settings change.
+    let ai: SwitchableProvider
     private(set) var coordinator: CaptureCoordinator?
     private(set) var queue: AIJobQueue?
     let monitor = SystemStateMonitor()
@@ -63,7 +64,7 @@ final class AppState: ObservableObject {
     private init() {
         let settings = RecallSettings.load()
         self.settings = settings
-        self.ollama = OllamaService(endpoint: settings.ollamaEndpoint, timeout: settings.requestTimeout)
+        self.ai = SwitchableProvider(settings.makeProvider())
         do {
             self.store = try RecallStore(paths: .default)
             self.startupError = nil
@@ -84,7 +85,7 @@ final class AppState: ObservableObject {
 
         let settingsBox = SettingsBox(settings)
         self.settingsBox = settingsBox
-        let queue = AIJobQueue(store: store, ollama: ollama, settings: { settingsBox.value })
+        let queue = AIJobQueue(store: store, ai: ai, settings: { settingsBox.value })
         self.queue = queue
         // AppState lives for the whole process, so callbacks reference the shared instance directly.
         let coordinator = CaptureCoordinator(store: store, settings: settings, ownBundleIdentifier: Bundle.main.bundleIdentifier) {
@@ -146,16 +147,16 @@ final class AppState: ObservableObject {
         settingsBox?.value = settings
         monitor.idleTimeout = settings.idleTimeout
         let s = settings
+        if old.providerConfiguration != s.providerConfiguration { ai.replace(with: s.makeProvider()) }
         Task {
             await coordinator?.update(settings: s)
-            await ollama.configure(endpoint: s.ollamaEndpoint, timeout: s.requestTimeout)
             if old.recordingEnabled != s.recordingEnabled {
                 if s.recordingEnabled { await coordinator?.start() } else { await coordinator?.stop() }
             }
             if old.aiProcessingEnabled != s.aiProcessingEnabled { await queue?.setAIPaused(!s.aiProcessingEnabled) }
             if old.maxConcurrentRequests != s.maxConcurrentRequests { await queue?.start() }
-            if old.ollamaEndpoint != s.ollamaEndpoint || old.visionModel != s.visionModel
-                || old.summaryModel != s.summaryModel || old.embeddingModel != s.embeddingModel {
+            if old.providerConfiguration != s.providerConfiguration || old.providerModels != s.providerModels
+                || old.acknowledgedRemoteTargets != s.acknowledgedRemoteTargets {
                 await queue?.checkHealth()
                 await queue?.wake()
             }
@@ -332,6 +333,19 @@ final class AppState: ObservableObject {
         Task { await queue?.wake() }
     }
 
+    /// Re-embeds all history with the current embedding model (most recent first).
+    func rebuildEmbeddings() {
+        guard let store else { return }
+        if let rows = try? store.db.query("SELECT id FROM captures ORDER BY captured_at DESC") {
+            for row in rows { try? store.enqueueJob(.embedding, entityType: "capture", entityID: row.int("id")!, priority: 1) }
+        }
+        if let rows = try? store.db.query("SELECT id FROM sessions ORDER BY started_at DESC") {
+            for row in rows { try? store.enqueueJob(.embedding, entityType: "session", entityID: row.int("id")!, priority: 1) }
+        }
+        Task { await queue?.wake() }
+        refreshQueue()
+    }
+
     /// Requests analysis of one capture ahead of the backlog.
     func prioritize(captureID: Int64) {
         try? store?.enqueueJob(.visionAnalysis, entityType: "capture", entityID: captureID, priority: 100)
@@ -346,32 +360,64 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// Checks the configured server and explains the result in user-facing terms.
-    func diagnoseOllama() async -> (ok: Bool, message: String) {
-        let endpoint = settings.ollamaEndpoint
+    /// Rebuilds the provider after credentials in the Keychain changed.
+    func credentialsChanged() {
+        ai.replace(with: settings.makeProvider())
+        Task {
+            await queue?.checkHealth()
+            await queue?.wake()
+            refreshQueue()
+        }
+    }
+
+    /// Checks the configured AI provider and explains the result in user-facing terms.
+    func diagnoseAI() async -> (ok: Bool, message: String) {
+        let s = settings
+        let name = s.aiProvider.displayName
+        let destination = s.aiDestination
         let result: (ok: Bool, message: String)
         do {
-            let models = try await ollama.listModels()
-            result = models.isEmpty
-                ? (true, "Connected to \(endpoint), but no models are installed. Install one with e.g. `ollama pull llama3.2`.")
-                : (true, "Connected to \(endpoint) — \(models.count) model\(models.count == 1 ? "" : "s") installed. Choose them in Settings → AI.")
-        } catch OllamaError.invalidEndpoint {
-            result = (false, "“\(endpoint)” isn't a valid URL. Fix it in Settings → AI.")
-        } catch OllamaError.unreachable {
-            result = (false, "No Ollama server is responding at \(endpoint). Install Ollama from ollama.com and start it (or run `ollama serve`), then check again. If it runs elsewhere, set the endpoint in Settings → AI.")
+            let models = try await ai.listModels()
+            if models.isEmpty {
+                let hint: String
+                switch s.aiProvider {
+                case .ollama: hint = " Install one with e.g. `ollama pull llama3.2`."
+                case .lmStudio: hint = " Download and load a model in LM Studio."
+                case .bedrock: hint = " Request model access in the Bedrock console for \(s.bedrockRegion)."
+                case .openAI: hint = ""
+                }
+                result = (true, "Connected to \(name) at \(destination), but no models are available.\(hint)")
+            } else {
+                result = (true, "Connected to \(name) — \(models.count) model\(models.count == 1 ? "" : "s") available. Choose them in Settings → AI.")
+            }
+        } catch AIProviderError.invalidEndpoint {
+            result = (false, "“\(destination)” isn't a valid URL. Fix it in Settings → AI.")
+        } catch AIProviderError.unreachable {
+            switch s.aiProvider {
+            case .ollama:
+                result = (false, "No Ollama server is responding at \(destination). Install Ollama from ollama.com and start it (or run `ollama serve`), then check again — or choose another provider in Settings → AI.")
+            case .lmStudio:
+                result = (false, "LM Studio isn't responding at \(destination). In LM Studio, open the Developer tab and start the local server, then check again.")
+            case .openAI, .bedrock:
+                result = (false, "Couldn't reach \(name) at \(destination). Check your internet connection.")
+            }
+        } catch AIProviderError.missingCredentials(let what) {
+            result = (false, "\(name) needs credentials: \(what). Add them in Settings → AI.")
+        } catch AIProviderError.unauthorized(let message) {
+            result = (false, "\(name) rejected the credentials: \(message)")
+        } catch AIProviderError.http(403, let message) where s.aiProvider == .bedrock {
+            // Listing models needs bedrock:ListFoundationModels; invocation may still be permitted.
+            result = (true, "Connected to Bedrock, but these credentials can't list models (\(message)). Enter model IDs manually in Settings → AI.")
         } catch {
-            result = (false, "Ollama at \(endpoint) responded with an error: \(error.localizedDescription)")
+            result = (false, "\(name) responded with an error: \(error.localizedDescription)")
         }
         // Keep the menu bar / queue status in sync with what we just learned.
         await queue?.checkHealth()
         refreshQueue()
+        if result.ok && !s.aiTransmissionAllowed {
+            return (true, result.message + " Approve sending data to \(destination) in Settings → AI before Recall uses it.")
+        }
         return result
-    }
-
-    func checkOllama() async -> Bool {
-        await queue?.checkHealth()
-        refreshQueue()
-        return await ollama.ping()
     }
 }
 

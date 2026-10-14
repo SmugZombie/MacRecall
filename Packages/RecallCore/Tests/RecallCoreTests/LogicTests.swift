@@ -267,8 +267,8 @@ import Testing
     }
 
     @Test func rejectsInvalid() {
-        #expect(throws: OllamaError.self) { try ActivityAnalysis.parse("I think the user is coding") }
-        #expect(throws: OllamaError.self) { try ActivityAnalysis.parse(#"{"activity":"","description":"x","applications":[],"topics":[],"confidence":0.5}"#) }
+        #expect(throws: AIProviderError.self) { try ActivityAnalysis.parse("I think the user is coding") }
+        #expect(throws: AIProviderError.self) { try ActivityAnalysis.parse(#"{"activity":"","description":"x","applications":[],"topics":[],"confidence":0.5}"#) }
     }
 
     @Test func groundedAnswerStripsFabricatedCitations() {

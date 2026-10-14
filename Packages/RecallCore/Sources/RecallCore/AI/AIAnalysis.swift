@@ -24,12 +24,12 @@ public struct ActivityAnalysis: Codable, Sendable, Equatable {
 
     /// Parses and sanity-checks model output. Invalid output never reaches the database.
     public static func parse(_ raw: String) throws -> ActivityAnalysis {
-        guard let data = Self.extractJSON(raw).data(using: .utf8) else { throw OllamaError.invalidResponse("not UTF-8") }
+        guard let data = Self.extractJSON(raw).data(using: .utf8) else { throw AIProviderError.invalidResponse("not UTF-8") }
         var value: ActivityAnalysis
         do {
             value = try JSONDecoder().decode(ActivityAnalysis.self, from: data)
         } catch {
-            throw OllamaError.invalidResponse("does not match schema")
+            throw AIProviderError.invalidResponse("does not match schema")
         }
         value.activity = value.activity.trimmingCharacters(in: .whitespacesAndNewlines).clipped(80)
         value.description = value.description.trimmingCharacters(in: .whitespacesAndNewlines).clipped(600)
@@ -38,7 +38,7 @@ public struct ActivityAnalysis: Codable, Sendable, Equatable {
         value.applications = Array(value.applications.prefix(8).map { $0.clipped(60) })
         value.topics = Array(value.topics.prefix(12).map { $0.clipped(60) })
         value.confidence = min(1, max(0, value.confidence.isFinite ? value.confidence : 0))
-        guard !value.activity.isEmpty, !value.description.isEmpty else { throw OllamaError.invalidResponse("empty fields") }
+        guard !value.activity.isEmpty, !value.description.isEmpty else { throw AIProviderError.invalidResponse("empty fields") }
         return value
     }
 
@@ -73,12 +73,12 @@ public struct SessionAnalysis: Codable, Sendable, Equatable {
     public static func parse(_ raw: String) throws -> SessionAnalysis {
         guard let data = ActivityAnalysis.extractJSON(raw).data(using: .utf8),
               var value = try? JSONDecoder().decode(SessionAnalysis.self, from: data) else {
-            throw OllamaError.invalidResponse("does not match schema")
+            throw AIProviderError.invalidResponse("does not match schema")
         }
         value.title = value.title.trimmingCharacters(in: .whitespacesAndNewlines).clipped(90)
         value.summary = value.summary.trimmingCharacters(in: .whitespacesAndNewlines).clipped(1500)
         value.confidence = min(1, max(0, value.confidence.isFinite ? value.confidence : 0))
-        guard !value.title.isEmpty else { throw OllamaError.invalidResponse("empty title") }
+        guard !value.title.isEmpty else { throw AIProviderError.invalidResponse("empty title") }
         return value
     }
 }
