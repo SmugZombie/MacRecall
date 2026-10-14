@@ -42,9 +42,8 @@ struct TimelineView: View {
             }
         }
         .task(id: TaskKey(range: range, revision: state.revision, app: appFilter, project: projectID)) { await reload() }
-        .onChange(of: nav.captureID) {
-            if let id = nav.captureID { selectedCaptureID = id; nav.captureID = nil }
-        }
+        .onChange(of: nav.captureID) { consumeRequestedCapture() }
+        .onAppear { consumeRequestedCapture() }
         .sheet(item: $editingSummary) { session in
             EditSummarySheet(session: session) { text in
                 try? state.store?.setSessionSummary(id: session.id, summary: text)
@@ -140,6 +139,14 @@ struct TimelineView: View {
         Button(session.summarySource == "user" ? "Regenerate Summary (keeps your text)" : "Regenerate Summary") {
             try? state.store?.enqueueJob(.sessionSummary, entityType: "session", entityID: session.id, priority: 90)
             state.refreshQueue()
+        }
+    }
+
+    /// Another view (e.g. Processing → Show Screenshot) asked for a capture to be opened.
+    private func consumeRequestedCapture() {
+        if let id = nav.captureID {
+            selectedCaptureID = id
+            nav.captureID = nil
         }
     }
 

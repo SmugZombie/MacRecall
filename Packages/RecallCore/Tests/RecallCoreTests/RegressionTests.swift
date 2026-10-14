@@ -497,3 +497,91 @@ import Testing
         #expect(next.entityID == sid && next.id != job.id)
     }
 }
+
+/// Scripted provider: fails with a context overflow until the request is small enough.
+final class ContextLimitedProvider: AIProvider, @unchecked Sendable {
+    let kind: AIProviderKind = .lmStudio
+    let maxPromptCharacters: Int
+    var promptSizes: [Int] = []
+    var imageSizes: [Int] = []
+
+    init(maxPromptCharacters: Int) { self.maxPromptCharacters = maxPromptCharacters }
+
+    func listModels() async throws -> [AIModel] { [] }
+    func ping() async -> Bool { true }
+    func validate(model: String, role: String) async throws {}
+    func embed(model: String, inputs: [String], purpose: EmbeddingPurpose) async throws -> [[Float]] { [] }
+    func chat(model: String, messages: [ChatMessage], schema: [String: Any]?, temperature: Double) async throws -> String {
+        let size = messages.map(\.content.count).reduce(0, +)
+        promptSizes.append(size)
+        imageSizes.append(messages.flatMap(\.images).map(\.count).reduce(0, +))
+        if size > maxPromptCharacters {
+            // LM Studio's actual wording.
+            throw AIProviderError.http(400, #"Engine protocol predict stream returned an error: {"code":500,"message":"Context size has been exceeded.","type":"server_error"}"#)
+        }
+        return #"{"activity":"Coding","description":"Editing code","applications":[],"topics":[],"confidence":0.8}"#
+    }
+}
+
+@Suite struct ContextOverflowTests {
+    @Test func recognisesProviderPhrasings() {
+        #expect(AIProviderError.http(400, #"... {"message":"Context size has been exceeded."}"#).isContextOverflow)
+        #expect(AIProviderError.http(400, "This model's maximum context length is 8192 tokens").isContextOverflow)
+        #expect(AIProviderError.http(400, "Input is too long for requested model.").isContextOverflow)
+        #expect(!AIProviderError.http(400, "Invalid API key").isContextOverflow)
+        #expect(!AIProviderError.unreachable("context").isContextOverflow)
+    }
+
+    func captureWithLotsOfText(_ store: RecallStore) throws -> CaptureRecord {
+        let text = String(repeating: "error: connection refused while deploying service\n", count: 120)  // ~6 KB of OCR
+        let image = ImageProcessing.draw(width: 2000, height: 1200) { ctx in
+            ctx.setFillColor(CGColor(gray: 1, alpha: 1)); ctx.fill(CGRect(x: 0, y: 0, width: 2000, height: 1200))
+        }!
+        let rel = "screenshots/test-\(UUID()).jpg"
+        try ImageProcessing.writeAtomically(try ImageProcessing.encode(image, format: .jpeg, quality: 0.8), to: store.paths.absolute(rel))
+        return try store.insertCapture(NewCapture(bundleIdentifier: "com.apple.Terminal", applicationName: "Terminal", pid: 1, systemWindowID: 1,
+                                                  windowTitle: "zsh", capturedAt: Date(), imagePath: rel, thumbnailPath: rel,
+                                                  imageHash: "", width: 2000, height: 1200, ocrText: text))
+    }
+
+    @Test func shrinksTheRequestUntilItFits() async throws {
+        let store = try makeStore()
+        let capture = try captureWithLotsOfText(store)
+        var settings = RecallSettings()
+        settings.aiProvider = .lmStudio
+        settings.visionModel = "gemma"
+        let provider = ContextLimitedProvider(maxPromptCharacters: 2000)
+        try await JobProcessor(store: store, ai: provider, settings: { settings }).analyze(captureID: capture.id)
+
+        #expect(try store.capture(id: capture.id)?.aiStatus == .done)
+        #expect(provider.promptSizes.count == 2)                              // full request, then the trimmed one
+        #expect(provider.promptSizes[1] < provider.promptSizes[0])
+        #expect(provider.imageSizes[1] < provider.imageSizes[0])               // smaller image too
+    }
+
+    @Test func explainsWhenNothingFits() async throws {
+        let store = try makeStore()
+        let capture = try captureWithLotsOfText(store)
+        var settings = RecallSettings()
+        settings.aiProvider = .lmStudio
+        settings.visionModel = "gemma"
+        let provider = ContextLimitedProvider(maxPromptCharacters: 10)
+        await #expect(throws: AIProviderError.contextTooSmall("gemma")) {
+            try await JobProcessor(store: store, ai: provider, settings: { settings }).analyze(captureID: capture.id)
+        }
+        #expect(provider.promptSizes.count == JobProcessor.visionBudgets.count)
+        #expect(try store.capture(id: capture.id)?.aiStatus == .failed)
+        #expect(AIProviderError.contextTooSmall("gemma").localizedDescription.contains("context length"))
+    }
+
+    @Test func singleJobRetry() throws {
+        let store = try makeStore()
+        try store.enqueueJob(.visionAnalysis, entityType: "capture", entityID: 1)
+        let job = try #require(try store.claimJobs(types: [.visionAnalysis], limit: 1).first)
+        try store.failJob(id: job.id, error: "boom", retryable: false)
+        #expect(try store.recentJobs(status: .failed).map(\.id) == [job.id])
+        try store.retryJob(id: job.id)
+        let again = try #require(try store.claimJobs(types: [.visionAnalysis], limit: 1).first)
+        #expect(again.id == job.id && again.attempts == 0 && again.lastError == nil)
+    }
+}

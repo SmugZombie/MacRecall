@@ -123,8 +123,18 @@ extension RecallStore {
         return counts
     }
 
-    public func recentJobs(limit: Int = 100) throws -> [JobRecord] {
-        try db.query("SELECT * FROM ai_jobs ORDER BY COALESCE(completed_at, created_at) DESC LIMIT ?", [limit]).compactMap(Self.job(from:))
+    public func recentJobs(limit: Int = 100, status: ProcessingStatus? = nil) throws -> [JobRecord] {
+        if let status {
+            return try db.query("SELECT * FROM ai_jobs WHERE status = ? ORDER BY COALESCE(completed_at, created_at) DESC LIMIT ?",
+                                [status.rawValue, limit]).compactMap(Self.job(from:))
+        }
+        return try db.query("SELECT * FROM ai_jobs ORDER BY COALESCE(completed_at, created_at) DESC LIMIT ?", [limit]).compactMap(Self.job(from:))
+    }
+
+    /// Puts one failed job back in the queue with a fresh set of attempts.
+    public func retryJob(id: Int64) throws {
+        try db.run("UPDATE ai_jobs SET status = 'pending', attempts = 0, last_error = NULL, next_attempt_at = ? WHERE id = ? AND status = 'failed'",
+                   [Date(), id])
     }
 
     public func purgeCompletedJobs(olderThan date: Date) throws {

@@ -90,7 +90,7 @@ extension AIProvider {
     }
 }
 
-public enum AIProviderError: Error, LocalizedError, Sendable {
+public enum AIProviderError: Error, LocalizedError, Sendable, Equatable {
     case invalidEndpoint
     case unreachable(String)
     case unauthorized(String)
@@ -101,6 +101,8 @@ public enum AIProviderError: Error, LocalizedError, Sendable {
     case invalidResponse(String)
     case unsupported(String)
     case redirectRefused(String)
+    /// The request didn't fit the model's context window even after shrinking it.
+    case contextTooSmall(String)
 
     public var errorDescription: String? {
         switch self {
@@ -113,6 +115,8 @@ public enum AIProviderError: Error, LocalizedError, Sendable {
         case .http(let code, let m): return "The AI provider returned HTTP \(code): \(m)"
         case .invalidResponse(let m): return "Invalid response from model: \(m)"
         case .unsupported(let m): return m
+        case .contextTooSmall(let model):
+            return "The screenshot and its text don't fit in \(model)'s context window, even after trimming. Increase the model's context length (for example to 8192 or more in LM Studio's model settings), or use a model with a larger context."
         case .redirectRefused(let target): return "The AI server tried to redirect the request to \(target). Recall only sends data to the configured server; update the endpoint if it moved."
         }
     }
@@ -125,6 +129,20 @@ public enum AIProviderError: Error, LocalizedError, Sendable {
         case .invalidResponse: return true
         default: return false
         }
+    }
+
+    /// The server rejected the request for exceeding the model's context window. Providers phrase
+    /// this differently (and LM Studio wraps it in a 400), so match on the message.
+    public var isContextOverflow: Bool {
+        let message: String
+        switch self {
+        case .http(_, let m), .invalidResponse(let m): message = m.lowercased()
+        default: return false
+        }
+        let phrases = ["context size has been exceeded", "context length", "context window", "maximum context",
+                       "exceeds the context", "exceed context", "too many tokens", "prompt is too long", "input is too long",
+                       "too long for the model", "num_ctx"]
+        return phrases.contains { message.contains($0) }
     }
 
     /// The provider as a whole is unusable right now (down, or credentials rejected/missing).

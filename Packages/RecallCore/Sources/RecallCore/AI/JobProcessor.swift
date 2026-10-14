@@ -71,20 +71,29 @@ public struct JobProcessor: Sendable {
                 guard !c.aiDescription.isEmpty else { return nil }
                 return "\(c.applicationName): \(c.aiDescription.clipped(160))"
             }
-        let ocr = (s.redactionEnabled ? s.sensitiveRules.redact(capture.ocrText) : capture.ocrText).clipped(3000)
-        let user = Prompts.visionUser(app: capture.applicationName, title: capture.windowTitle,
-                                      timestamp: Self.localTimestamp(capture.capturedAt, tz: capture.timezone),
-                                      ocr: ocr, previous: previous)
-        var images: [Data]?
-        if useVision {
-            images = [try ImageProcessing.jpegForModel(store.paths.absolute(capture.imagePath))]
-        }
+        let fullOCR = s.redactionEnabled ? s.sensitiveRules.redact(capture.ocrText) : capture.ocrText
+
         do {
-            let raw = try await ai.chat(model: model, messages: [
-                ChatMessage(role: "system", content: Prompts.visionSystem()),
-                ChatMessage(role: "user", content: user, images: images),
-            ], schema: ActivityAnalysis.schema)
-            let analysis = try ActivityAnalysis.parse(raw)
+            var analysis: ActivityAnalysis?
+            // Text-heavy screenshots can overflow small context windows (common with local models).
+            // Shrink the request step by step before giving up.
+            for budget in Self.visionBudgets {
+                let user = Prompts.visionUser(app: capture.applicationName, title: capture.windowTitle,
+                                              timestamp: Self.localTimestamp(capture.capturedAt, tz: capture.timezone),
+                                              ocr: fullOCR.clipped(budget.ocrCharacters), previous: Array(previous.prefix(budget.previousItems)))
+                let images = useVision ? [try ImageProcessing.jpegForModel(store.paths.absolute(capture.imagePath), maxPixel: budget.imagePixels)] : nil
+                do {
+                    let raw = try await ai.chat(model: model, messages: [
+                        ChatMessage(role: "system", content: Prompts.visionSystem()),
+                        ChatMessage(role: "user", content: user, images: images),
+                    ], schema: ActivityAnalysis.schema)
+                    analysis = try ActivityAnalysis.parse(raw)
+                    break
+                } catch let error as AIProviderError where error.isContextOverflow {
+                    continue
+                }
+            }
+            guard let analysis else { throw AIProviderError.contextTooSmall(model) }
             let json = String(data: try JSONEncoder().encode(analysis), encoding: .utf8)
             try store.updateAI(captureID: captureID, description: analysis.searchableText, json: json, status: .done)
         } catch let error as AIProviderError where !error.isOutage {
@@ -97,6 +106,19 @@ public struct JobProcessor: Sendable {
         try store.enqueueJob(.embedding, entityType: "capture", entityID: captureID, priority: 5)
         try store.enqueueJob(.projectAssociation, entityType: "capture", entityID: captureID, priority: 15)
     }
+
+    struct VisionBudget: Equatable {
+        var ocrCharacters: Int
+        var imagePixels: Int
+        var previousItems: Int
+    }
+
+    /// Full request first, then progressively smaller ones if the model's context overflows.
+    static let visionBudgets = [
+        VisionBudget(ocrCharacters: 3000, imagePixels: 1344, previousItems: 3),
+        VisionBudget(ocrCharacters: 1200, imagePixels: 1024, previousItems: 1),
+        VisionBudget(ocrCharacters: 400, imagePixels: 768, previousItems: 0),
+    ]
 
     // MARK: Embeddings
 

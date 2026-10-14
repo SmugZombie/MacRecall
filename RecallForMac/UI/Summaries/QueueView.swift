@@ -1,9 +1,12 @@
+import AppKit
 import RecallCore
 import SwiftUI
 
 struct QueueView: View {
     @EnvironmentObject private var state: AppState
     @State private var jobs: [JobRecord] = []
+    @State private var selection: JobRecord.ID?
+    @State private var filter: ProcessingStatus?
 
     var body: some View {
         let q = state.queueStatus
@@ -44,7 +47,20 @@ struct QueueView: View {
                 Text("Last error: \(error)").font(.caption).foregroundStyle(.red).padding(.horizontal, 16).padding(.bottom, 8)
             }
             Divider()
-            Table(jobs) {
+            HStack {
+                Picker("Show", selection: $filter) {
+                    Text("All").tag(ProcessingStatus?.none)
+                    Text("Failed").tag(Optional(ProcessingStatus.failed))
+                    Text("Pending").tag(Optional(ProcessingStatus.pending))
+                    Text("Running").tag(Optional(ProcessingStatus.running))
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
+                Spacer()
+                Text("Select a job to see its full error.").font(.caption).foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 16).padding(.vertical, 8)
+            Table(jobs, selection: $selection) {
                 TableColumn("Job") { Text($0.type.rawValue.replacingOccurrences(of: "_", with: " ")) }
                 TableColumn("Target") { Text("\($0.entityType) \($0.entityID)").monospacedDigit() }
                 TableColumn("Status") { job in
@@ -55,13 +71,63 @@ struct QueueView: View {
                 TableColumn("Created") { Text($0.createdAt.formatted(date: .omitted, time: .standard)) }
                 TableColumn("Error") { Text($0.lastError ?? "").foregroundStyle(.secondary).lineLimit(1).help($0.lastError ?? "") }
             }
+            .contextMenu(forSelectionType: JobRecord.ID.self) { ids in
+                if let job = jobs.first(where: { ids.contains($0.id) }) {
+                    Button("Copy Error") { copy(job.lastError ?? "") }.disabled(job.lastError == nil)
+                    Button("Retry") { retry(job) }.disabled(job.status != .failed)
+                }
+            }
+            if let job = jobs.first(where: { $0.id == selection }) {
+                Divider()
+                detail(job)
+            }
         }
         .navigationTitle("Processing")
-        .task(id: state.queueStatus) { reload() }
+        .task(id: "\(state.queueStatus.counts.pending)-\(state.queueStatus.counts.failed)-\(state.queueStatus.counts.running)-\(String(describing: filter))") { reload() }
         .onAppear { state.refreshQueue() }
     }
 
-    private func reload() { jobs = (try? state.store?.recentJobs(limit: 200)) ?? [] }
+    private func reload() { jobs = (try? state.store?.recentJobs(limit: 300, status: filter)) ?? [] }
+
+    private func detail(_ job: JobRecord) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("\(job.type.rawValue.replacingOccurrences(of: "_", with: " ")) · \(job.entityType) \(job.entityID)").font(.headline)
+                StatusPill(text: job.status.rawValue, color: color(job.status))
+                Text("\(job.attempts) attempt\(job.attempts == 1 ? "" : "s")").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                if job.entityType == "capture" {
+                    Button("Show Screenshot") {
+                        NavigationRequest.shared.section = .today
+                        NavigationRequest.shared.captureID = job.entityID
+                    }
+                }
+                Button("Copy Error") { copy(job.lastError ?? "") }.disabled(job.lastError == nil)
+                Button("Retry") { retry(job) }.disabled(job.status != .failed)
+            }
+            ScrollView {
+                Text(job.lastError ?? "No error recorded.")
+                    .font(.system(.callout, design: .monospaced))
+                    .foregroundStyle(job.lastError == nil ? .secondary : .primary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxHeight: 110)
+        }
+        .padding(16)
+    }
+
+    private func copy(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    private func retry(_ job: JobRecord) {
+        try? state.store?.retryJob(id: job.id)
+        if job.type == .visionAnalysis { try? state.store?.setAIStatus(captureID: job.entityID, .pending) }
+        state.refreshQueue()
+        reload()
+    }
 
     private func stat(_ label: String, _ n: Int) -> some View {
         VStack(alignment: .leading) {
