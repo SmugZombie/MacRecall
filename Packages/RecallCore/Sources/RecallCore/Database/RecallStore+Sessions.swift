@@ -132,10 +132,16 @@ extension RecallStore {
         try db.run("UPDATE sessions SET title = ?, title_source = 'user' WHERE id = ?", [title, id])
     }
 
-    /// A user-written summary; an empty one hands the summary back to AI.
+    /// A user-written summary. An empty one hands the summary back to AI and queues a new one:
+    /// the scheduler won't, because the session already has a completed summary job.
     public func setSessionSummary(id: Int64, summary: String) throws {
         let trimmed = summary.trimmingCharacters(in: .whitespacesAndNewlines)
-        try db.run("UPDATE sessions SET summary = ?, summary_source = ? WHERE id = ?", [trimmed, trimmed.isEmpty ? "none" : "user", id])
+        try db.transaction {
+            try db.run("UPDATE sessions SET summary = ?, summary_source = ? WHERE id = ?", [trimmed, trimmed.isEmpty ? "none" : "user", id])
+            if trimmed.isEmpty {
+                try enqueueJob(.sessionSummary, entityType: "session", entityID: id, priority: 90)
+            }
+        }
     }
 
     /// Sets the session's project. Capture-level associations are independent classifier signals and

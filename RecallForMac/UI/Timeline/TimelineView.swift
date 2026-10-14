@@ -49,6 +49,7 @@ struct TimelineView: View {
             EditSummarySheet(session: session) { text in
                 try? state.store?.setSessionSummary(id: session.id, summary: text)
                 state.historyChanged()
+                state.refreshQueue()  // clearing the summary queues a new one
             }
         }
         .sheet(item: $renaming) { session in

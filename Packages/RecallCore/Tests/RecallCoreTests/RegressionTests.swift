@@ -400,3 +400,29 @@ import Testing
         #expect(!RedirectGuard.allows(from: u("http://127.0.0.1:1234/v1"), to: u("http://127.0.0.1:9999/v1")))
     }
 }
+
+@Suite struct ClearedSummaryTests {
+    @Test func clearingASummaryQueuesANewOne() throws {
+        let store = try makeStore()
+        let t0 = Date().addingTimeInterval(-86400)
+        let c = try addCapture(store, at: t0)
+        let sid = try store.createSession(start: t0, end: t0, title: "x", activeSeconds: 0, captureIDs: [c.id])
+
+        // The AI summary ran and completed.
+        try store.enqueueJob(.sessionSummary, entityType: "session", entityID: sid)
+        let job = try #require(try store.claimJobs(types: [.sessionSummary], limit: 1).first)
+        try store.applyAISessionResult(id: sid, title: "AI", summary: "AI summary", confidence: 0.8)
+        try store.completeJob(id: job.id)
+
+        // The user writes their own, then clears it.
+        try store.setSessionSummary(id: sid, summary: "mine")
+        #expect(try store.queueCounts().byType[.sessionSummary] == nil)
+        try store.setSessionSummary(id: sid, summary: "")
+
+        // The scheduler alone would skip it (a done job exists); clearing must have queued one.
+        try ActivitySessionManager(store: store).scheduleSummaries(now: Date())
+        #expect(try store.queueCounts().byType[.sessionSummary] == 1)
+        let next = try #require(try store.claimJobs(types: [.sessionSummary], limit: 1).first)
+        #expect(next.entityID == sid && next.id != job.id)
+    }
+}
