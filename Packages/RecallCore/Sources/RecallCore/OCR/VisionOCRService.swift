@@ -17,15 +17,14 @@ public struct OCRLine: Sendable {
         self.locate = locate
     }
 
-    /// Where `range` sits on screen: Vision's own box if available, otherwise estimated from the
-    /// character offsets within the line (exact for monospaced text, close for proportional).
+    /// Where `range` sits on screen. Uses Vision's box for the substring when it has one; otherwise
+    /// the whole line, because estimating from character counts can miss the text in a
+    /// proportional font, and a missed secret is worse than an over-redacted line.
     public func box(for range: Range<String.Index>) -> CGRect {
-        if let exact = locate?(range), !exact.isEmpty { return exact }
-        let count = max(1, text.count)
-        let start = text.distance(from: text.startIndex, to: range.lowerBound)
-        let length = text.distance(from: range.lowerBound, to: range.upperBound)
-        let x = boundingBox.minX + boundingBox.width * CGFloat(start) / CGFloat(count)
-        return CGRect(x: x, y: boundingBox.minY, width: boundingBox.width * CGFloat(length) / CGFloat(count), height: boundingBox.height)
+        if let exact = locate?(range), !exact.isEmpty, exact.intersects(boundingBox.insetBy(dx: -0.01, dy: -0.01)) {
+            return exact
+        }
+        return boundingBox
     }
 }
 
@@ -56,6 +55,23 @@ public struct VisionOCRService: Sendable {
         }
     }
 
+    /// Box for `range` of `text` (our copy of the candidate's string), asked of Vision safely.
+    ///
+    /// `VNRecognizedText.string` returns a new String on each access, and an index from one String
+    /// isn't valid in another — using it can trap, which `try?` doesn't catch. So the range is
+    /// rebuilt on a fresh read of `candidate.string` from UTF-16 offsets, and only if the text matches.
+    static func visionBox(_ candidate: VNRecognizedText, text: String, range: Range<String.Index>) -> CGRect? {
+        let start = range.lowerBound.utf16Offset(in: text)
+        let end = range.upperBound.utf16Offset(in: text)
+        let fresh = candidate.string
+        guard fresh == text, start >= 0, start <= end, end <= fresh.utf16.count else { return nil }
+        let lower = String.Index(utf16Offset: start, in: fresh)
+        let upper = String.Index(utf16Offset: end, in: fresh)
+        // An offset inside a surrogate pair or grapheme cluster doesn't land on a character boundary.
+        guard lower.samePosition(in: fresh) != nil, upper.samePosition(in: fresh) != nil else { return nil }
+        return (try? candidate.boundingBox(for: lower..<upper))?.boundingBox
+    }
+
     static func perform(_ image: CGImage, languages: [String]) throws -> OCRResult {
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .accurate
@@ -70,8 +86,7 @@ public struct VisionOCRService: Sendable {
             guard let candidate = obs.topCandidates(1).first else { return nil }
             let text = candidate.string
             return OCRLine(text: text, confidence: candidate.confidence, boundingBox: obs.boundingBox) { range in
-                // Vision expects ranges into its own string; ours is the same value.
-                (try? candidate.boundingBox(for: range))?.boundingBox
+                Self.visionBox(candidate, text: text, range: range)
             }
         }.sorted {
             abs($0.boundingBox.midY - $1.boundingBox.midY) > 0.01

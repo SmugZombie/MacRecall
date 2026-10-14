@@ -23,7 +23,8 @@ public enum ImageProcessing {
     }
 
     /// Paints opaque boxes over regions given in Vision's normalized, bottom-left-origin coordinates.
-    public static func redact(_ image: CGImage, normalizedRects: [CGRect]) -> CGImage {
+    /// Returns nil if the image couldn't be redrawn: callers must not fall back to the original.
+    public static func redact(_ image: CGImage, normalizedRects: [CGRect]) -> CGImage? {
         guard !normalizedRects.isEmpty else { return image }
         let w = image.width, h = image.height
         return draw(width: w, height: h) { ctx in
@@ -34,7 +35,7 @@ public enum ImageProcessing {
                                width: rect.width * Double(w), height: rect.height * Double(h)).insetBy(dx: -4, dy: -3)
                 ctx.fill(r)
             }
-        } ?? image
+        }
     }
 
     static func draw(width: Int, height: Int, _ body: (CGContext) -> Void) -> CGImage? {

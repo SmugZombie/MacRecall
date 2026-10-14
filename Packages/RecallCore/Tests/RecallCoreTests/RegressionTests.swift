@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import Foundation
 import Testing
@@ -252,23 +253,93 @@ import Testing
         #expect(!rules.matches("2026-10-14 15:53:12 build 1234567"))
     }
 
-    @Test func onlyTheMatchedSpanIsBlackedOut() async throws {
-        let line = "Card: 4111 1111 1111 1111 exp 12/27"
-        let box = CGRect(x: 0, y: 0.4, width: 1, height: 0.1)
-        let ocr = OCRResult(lines: [OCRLine(text: line, confidence: 1, boundingBox: box)])
-        let image = ImageProcessing.draw(width: 400, height: 100) { ctx in
-            ctx.setFillColor(CGColor(gray: 1, alpha: 1)); ctx.fill(CGRect(x: 0, y: 0, width: 400, height: 100))
+    func blank(_ w: Int = 400, _ h: Int = 100) -> CGImage {
+        ImageProcessing.draw(width: w, height: h) { ctx in
+            ctx.setFillColor(CGColor(gray: 1, alpha: 1)); ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
         }!
-        let prepared = try await RedactionGate.prepare(image, rules: rules) { _ in ocr }
+    }
+
+    @Test func withoutAVisionBoxTheWholeLineIsBlackedOut() async throws {
+        // Estimating from character counts can miss the secret in a proportional font, so don't.
+        let line = "Card: 4111 1111 1111 1111 exp 12/27"
+        let box = CGRect(x: 0.05, y: 0.4, width: 0.9, height: 0.1)
+        let ocr = OCRResult(lines: [OCRLine(text: line, confidence: 1, boundingBox: box)])
+        let prepared = try await RedactionGate.prepare(blank(), rules: rules) { _ in ocr }
         #expect(prepared.redacted)
         #expect(prepared.ocrText == "Card: [REDACTED] exp 12/27")
-        // The span estimate covers the number, not the whole line.
-        let range = line.range(of: "4111 1111 1111 1111")!
-        let rect = OCRLine(text: line, confidence: 1, boundingBox: box).box(for: range)
-        #expect(rect.minX > 0.1 && rect.maxX < 0.8)
-        // Pixels at the line's start and end stay white.
+        #expect(OCRLine(text: line, confidence: 1, boundingBox: box).box(for: line.range(of: "4111")!) == box)
         let grid = ImageFingerprint.grayscale(prepared.image, width: 400, height: 100)!
-        #expect(grid[55 * 400 + 2] > 200 && grid[55 * 400 + 397] > 200)
+        #expect(grid[55 * 400 + 25] < 50 && grid[55 * 400 + 375] < 50)  // both ends of the line are covered
+    }
+
+    @Test func failsClosedWhenRedactionCannotBePainted() async {
+        let ocr = OCRResult(lines: [OCRLine(text: "AKIAABCDEFGHIJKLMNOP", confidence: 1, boundingBox: CGRect(x: 0, y: 0, width: 1, height: 1))])
+        await #expect(throws: RedactionGate.Unavailable.self) {
+            _ = try await RedactionGate.prepare(blank(), rules: rules, paint: { _, _ in nil }) { _ in ocr }
+        }
+        // Nothing sensitive means nothing to paint, so painting can't fail the capture.
+        let clean = OCRResult(lines: [OCRLine(text: "ls -la", confidence: 1, boundingBox: .zero)])
+        let prepared = try? await RedactionGate.prepare(blank(), rules: rules, paint: { _, _ in nil }) { _ in clean }
+        #expect(prepared?.redacted == false)
+    }
+
+    @Test func implausibleVisionBoxFallsBackToTheLine() {
+        let line = OCRLine(text: "abc secret", confidence: 1, boundingBox: CGRect(x: 0, y: 0.5, width: 0.5, height: 0.1)) { _ in
+            CGRect(x: 0.9, y: 0.0, width: 0.05, height: 0.05)  // nowhere near the line
+        }
+        #expect(line.box(for: line.text.range(of: "secret")!) == line.boundingBox)
+    }
+
+    /// End to end with real Vision on proportional text: exercises `VNRecognizedText.boundingBox(for:)`
+    /// through the locator, which must neither trap nor miss the secret.
+    @Test func realVisionRedactsTheSecretInProportionalText() async throws {
+        let secret = "AKIAIOSFODNN7EXAMPLE"
+        let prefix = "Deploy with WWWWWWWW key "
+        let font = NSFont.systemFont(ofSize: 34)
+        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.black]
+        let width = 1600, height = 140
+        let origin = CGPoint(x: 40, y: 50)
+        let image = ImageProcessing.draw(width: width, height: height) { ctx in
+            ctx.setFillColor(CGColor(gray: 1, alpha: 1)); ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: false)
+            NSAttributedString(string: prefix + secret + " now", attributes: attrs).draw(at: origin)
+            NSGraphicsContext.restoreGraphicsState()
+        }!
+        let prepared = try await RedactionGate.prepare(image, rules: rules) { try await VisionOCRService().recognize($0) }
+        #expect(prepared.redacted)
+        #expect(!prepared.ocrText.contains(secret))
+
+        // Every column the secret was drawn in must be covered at the text's vertical middle.
+        let secretStart = origin.x + NSAttributedString(string: prefix, attributes: attrs).size().width
+        let secretEnd = secretStart + NSAttributedString(string: secret, attributes: attrs).size().width
+        let midY = Int(origin.y + font.capHeight / 2)
+        let grid = ImageFingerprint.grayscale(prepared.image, width: width, height: height)!
+        let row = height - 1 - midY  // the grayscale buffer's first row is the image's top
+        for x in stride(from: Int(secretStart) + 2, to: Int(secretEnd) - 2, by: 6) {
+            #expect(grid[row * width + x] < 40, "secret column \(x) not covered")
+        }
+    }
+
+    @Test func realVisionLocatorReturnsANarrowBoxForTheSubstring() throws {
+        let text = "Deploy with key AKIAIOSFODNN7EXAMPLE now"
+        let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 34), .foregroundColor: NSColor.black]
+        let image = ImageProcessing.draw(width: 1400, height: 120) { ctx in
+            ctx.setFillColor(CGColor(gray: 1, alpha: 1)); ctx.fill(CGRect(x: 0, y: 0, width: 1400, height: 120))
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: false)
+            NSAttributedString(string: text, attributes: attrs).draw(at: CGPoint(x: 30, y: 40))
+            NSGraphicsContext.restoreGraphicsState()
+        }!
+        let line = try #require(try VisionOCRService.perform(image, languages: ["en-US"]).lines.first { $0.text.contains("AKIA") })
+        let range = try #require(line.text.range(of: "AKIAIOSFODNN7EXAMPLE"))
+        let exact = try #require(line.locate?(range))
+        #expect(exact.intersects(line.boundingBox))
+        #expect(exact.width < line.boundingBox.width * 0.75)  // a span, not the whole line
+        #expect(line.box(for: range) == exact)
+        // Ranges from a different String instance are rebuilt safely, never trapping.
+        let other = String(line.text.reversed().reversed())
+        _ = line.locate?(other.range(of: "AKIA")!)
     }
 
     @Test func visionLocatorIsPreferred() {

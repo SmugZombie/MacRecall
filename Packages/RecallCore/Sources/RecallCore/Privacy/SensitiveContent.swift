@@ -17,6 +17,7 @@ public enum RedactionGate {
     }
 
     public static func prepare(_ image: CGImage, rules: SensitiveContentRules,
+                               paint: (CGImage, [CGRect]) -> CGImage? = ImageProcessing.redact,
                                recognize: (CGImage) async throws -> OCRResult) async throws -> Prepared {
         let result: OCRResult
         do {
@@ -26,8 +27,14 @@ public enum RedactionGate {
         }
         // Black out only the matched spans, not whole lines.
         let rects = result.lines.flatMap { line in rules.matchRanges(in: line.text).map { line.box(for: $0) } }
-        let image = rects.isEmpty ? image : ImageProcessing.redact(image, normalizedRects: rects)
-        return Prepared(image: image, ocrText: rules.redact(result.text), ocrConfidence: result.meanConfidence, redacted: !rects.isEmpty)
+        guard !rects.isEmpty else {
+            return Prepared(image: image, ocrText: rules.redact(result.text), ocrConfidence: result.meanConfidence, redacted: false)
+        }
+        // If the boxes can't be painted, fail closed exactly like a failed OCR.
+        guard let redacted = paint(image, rects) else {
+            throw Unavailable(underlying: "couldn't draw the redaction over the image")
+        }
+        return Prepared(image: redacted, ocrText: rules.redact(result.text), ocrConfidence: result.meanConfidence, redacted: true)
     }
 }
 
