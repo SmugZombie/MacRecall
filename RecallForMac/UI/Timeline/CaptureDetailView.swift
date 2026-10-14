@@ -4,14 +4,19 @@ import SwiftUI
 
 struct CaptureDetailView: View {
     let captureID: Int64
+    /// When set (e.g. search results), Previous/Next step through these IDs instead of the whole timeline.
+    var sequence: [Int64]? = nil
+    var sequenceName = "Result"
+    var onClose: (() -> Void)? = nil
     var onSelect: (Int64) -> Void
 
     @EnvironmentObject private var state: AppState
     @State private var capture: CaptureRecord?
     @State private var session: SessionRecord?
     @State private var related: [CaptureRecord] = []
-    @State private var previous: CaptureRecord?
-    @State private var next: CaptureRecord?
+    @State private var previousID: Int64?
+    @State private var nextID: Int64?
+    @State private var position: (index: Int, count: Int)?
 
     var body: some View {
         ScrollView {
@@ -40,8 +45,15 @@ struct CaptureDetailView: View {
         guard let store = state.store, let c = try? store.capture(id: captureID) else { capture = nil; return }
         capture = c
         session = c.sessionID.flatMap { try? store.session(id: $0) }
-        previous = try? store.previousCapture(before: c.capturedAt)
-        next = try? store.nextCapture(after: c.capturedAt)
+        if let sequence, let i = sequence.firstIndex(of: c.id) {
+            previousID = i > 0 ? sequence[i - 1] : nil
+            nextID = i + 1 < sequence.count ? sequence[i + 1] : nil
+            position = (i + 1, sequence.count)
+        } else {
+            previousID = (try? store.previousCapture(before: c.capturedAt))?.id
+            nextID = (try? store.nextCapture(after: c.capturedAt))?.id
+            position = nil
+        }
         if let sid = c.sessionID {
             let all = (try? store.captures(inSession: sid)) ?? []
             if let i = all.firstIndex(where: { $0.id == c.id }) {
@@ -52,17 +64,31 @@ struct CaptureDetailView: View {
         }
     }
 
+    // ⌘[ / ⌘] rather than bare arrow keys, which belong to whatever text field has focus.
     private func navigation(_ c: CaptureRecord) -> some View {
         HStack {
-            Button { if let p = previous { onSelect(p.id) } } label: { Label("Previous", systemImage: "chevron.left") }
-                .disabled(previous == nil).keyboardShortcut(.leftArrow, modifiers: [])
+            if let onClose {
+                Button(action: onClose) { Image(systemName: "xmark") }
+                    .buttonStyle(.borderless)
+                    .keyboardShortcut(.cancelAction)
+                    .help("Close (Esc)")
+            }
+            Button { if let p = previousID { onSelect(p) } } label: { Image(systemName: "chevron.left") }
+                .disabled(previousID == nil).keyboardShortcut("[", modifiers: .command)
+                .help(position == nil ? "Previous screenshot (⌘[)" : "Previous \(sequenceName.lowercased()) (⌘[)")
             Spacer()
-            Text(c.capturedAt.formatted(date: .abbreviated, time: .standard))
-                .font(.headline.monospacedDigit())
-                .help("UTC: \(c.capturedAt.formatted(.iso8601))  ·  Time zone: \(c.timezone)")
+            VStack(spacing: 1) {
+                Text(c.capturedAt.formatted(date: .abbreviated, time: .standard))
+                    .font(.headline.monospacedDigit())
+                    .help("UTC: \(c.capturedAt.formatted(.iso8601))  ·  Time zone: \(c.timezone)")
+                if let position {
+                    Text("\(sequenceName) \(position.index) of \(position.count)").font(.caption).foregroundStyle(.secondary)
+                }
+            }
             Spacer()
-            Button { if let n = next { onSelect(n.id) } } label: { Label("Next", systemImage: "chevron.right").labelStyle(.titleAndIcon) }
-                .disabled(next == nil).keyboardShortcut(.rightArrow, modifiers: [])
+            Button { if let n = nextID { onSelect(n) } } label: { Image(systemName: "chevron.right") }
+                .disabled(nextID == nil).keyboardShortcut("]", modifiers: .command)
+                .help(position == nil ? "Next screenshot (⌘])" : "Next \(sequenceName.lowercased()) (⌘])")
         }
     }
 

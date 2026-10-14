@@ -347,6 +347,19 @@ final class AppState: ObservableObject {
         Task { await queue?.wake() }
     }
 
+    /// Runs a user-initiated AI request ahead of background analysis.
+    func interactive<T>(_ operation: () async throws -> T) async rethrows -> T {
+        await queue?.beginInteractive()
+        do {
+            let value = try await operation()
+            await queue?.endInteractive()
+            return value
+        } catch {
+            await queue?.endInteractive()
+            throw error
+        }
+    }
+
     /// Re-embeds all history with the current embedding model (most recent first).
     func rebuildEmbeddings() {
         guard let store else { return }

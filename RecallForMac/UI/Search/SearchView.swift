@@ -14,6 +14,9 @@ struct SearchView: View {
     @State private var answering = false
     @State private var selectedCaptureID: Int64?
     @State private var searchTask: Task<Void, Never>?
+    @State private var askTask: Task<Void, Never>?
+    @State private var recent: [String] = RecentSearches.load()
+    @FocusState private var fieldFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -24,7 +27,9 @@ struct SearchView: View {
         .navigationTitle(projectID == nil ? "Search" : "Search Project")
         .inspector(isPresented: Binding(get: { selectedCaptureID != nil }, set: { if !$0 { selectedCaptureID = nil } })) {
             if let id = selectedCaptureID {
-                CaptureDetailView(captureID: id, onSelect: { selectedCaptureID = $0 })
+                CaptureDetailView(captureID: id, sequence: results?.captures.map(\.id),
+                                  onClose: { selectedCaptureID = nil; fieldFocused = true },
+                                  onSelect: { selectedCaptureID = $0 })
                     .inspectorColumnWidth(min: 380, ideal: 520, max: 900)
             }
         }
@@ -37,12 +42,30 @@ struct SearchView: View {
                 TextField("Search your history — e.g. “postgres error yesterday” or “when was I troubleshooting Docker networking?”", text: $query)
                     .textFieldStyle(.plain)
                     .font(.title3)
-                    .onSubmit { runSearch() }
+                    .focused($fieldFocused)
+                    .onSubmit { remember(); runSearch() }
                     .onChange(of: query) { debounceSearch() }
                 if searching { ProgressView().controlSize(.small) }
+                if !query.isEmpty {
+                    Button { clear() } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                        .buttonStyle(.borderless)
+                        .help("Clear search")
+                }
+                Menu {
+                    if recent.isEmpty {
+                        Text("No recent searches")
+                    } else {
+                        ForEach(recent, id: \.self) { item in Button(item) { use(item) } }
+                        Divider()
+                        Button("Clear Recent Searches") { recent = []; RecentSearches.save([]) }
+                    }
+                } label: { Image(systemName: "clock.arrow.circlepath") }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Recent searches")
                 Toggle("Exact", isOn: $exact).toggleStyle(.checkbox).help("Require every word (keyword search only)")
                     .onChange(of: exact) { runSearch() }
-                Button("Ask") { ask() }
+                Button("Ask") { remember(); ask() }
                     .disabled(query.isEmpty || state.settings.summaryModel.isEmpty || !state.settings.aiTransmissionAllowed || answering)
                     .help(state.settings.summaryModel.isEmpty ? "Select a summary model in Settings → AI to ask questions"
                           : !state.settings.aiTransmissionAllowed ? "Approve the AI provider in Settings → AI first"
@@ -97,23 +120,41 @@ struct SearchView: View {
                     ForEach(results.captures) { hit in
                         CaptureHitRow(hit: hit, selected: selectedCaptureID == hit.id)
                             .contentShape(Rectangle())
-                            .onTapGesture { selectedCaptureID = hit.id }
+                            .onTapGesture { remember(); selectedCaptureID = hit.id }
                     }
                 }
             }
             .listStyle(.inset)
         } else {
-            ContentUnavailableView {
-                Label("Search your history", systemImage: "magnifyingglass")
-            } description: {
-                Text("Matches recognized text, window titles, applications, AI descriptions and projects. Dates like “yesterday morning” or “last Tuesday” and app names like “terminal” become filters.")
+            VStack(spacing: 16) {
+                ContentUnavailableView {
+                    Label("Search your history", systemImage: "magnifyingglass")
+                } description: {
+                    Text("Matches recognized text, window titles, applications, AI descriptions and projects. Dates like “yesterday morning” or “last Tuesday” and app names like “terminal” become filters.")
+                }
+                if !recent.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Recent searches").font(.headline)
+                        ForEach(recent.prefix(8), id: \.self) { item in
+                            Button { use(item) } label: { Label(item, systemImage: "clock") }.buttonStyle(.link)
+                        }
+                    }
+                    .frame(maxWidth: 420, alignment: .leading)
+                }
+                Spacer()
             }
         }
     }
 
     @ViewBuilder private var answerView: some View {
         if answering {
-            HStack { ProgressView().controlSize(.small); Text("Reading your history…").foregroundStyle(.secondary) }
+            HStack {
+                ProgressView().controlSize(.small)
+                Text("Asking \(state.settings.summaryModel)… background analysis is paused until it answers.")
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Cancel") { cancelAsk() }
+            }
         } else if let answer {
             VStack(alignment: .leading, spacing: 8) {
                 Text(answer.text).textSelection(.enabled)
@@ -141,6 +182,7 @@ struct SearchView: View {
 
     private func debounceSearch() {
         searchTask?.cancel()
+        cancelAsk()
         answer = nil
         searchTask = Task {
             try? await Task.sleep(for: .milliseconds(350))
@@ -173,19 +215,69 @@ struct SearchView: View {
     private func ask() {
         let q = query
         let s = state.settings
+        askTask?.cancel()
         answering = true
         answer = nil
-        Task {
-            defer { answering = false }
+        askTask = Task {
+            defer { if !Task.isCancelled { answering = false } }
             if results == nil { await performSearch() }
-            guard let results else { return }
+            guard let results, !Task.isCancelled else { return }
             let answerer = GroundedAnswerer(ai: state.ai, model: s.summaryModel, redactWith: s.redactionEnabled ? s.sensitiveRules : nil)
             do {
-                answer = try await answerer.answer(question: q, results: results)
+                let result = try await state.interactive { try await answerer.answer(question: q, results: results) }
+                if !Task.isCancelled { answer = result }
             } catch {
-                answer = GroundedAnswer(text: "Couldn't get an answer: \(error.localizedDescription)", citations: [], sufficientEvidence: false)
+                if !Task.isCancelled {
+                    answer = GroundedAnswer(text: "Couldn't get an answer: \(error.localizedDescription)", citations: [], sufficientEvidence: false)
+                }
             }
         }
+    }
+
+    private func cancelAsk() {
+        askTask?.cancel()
+        askTask = nil
+        answering = false
+    }
+
+    private func clear() {
+        searchTask?.cancel()
+        cancelAsk()
+        query = ""
+        results = nil
+        answer = nil
+        error = nil
+        selectedCaptureID = nil
+        fieldFocused = true
+    }
+
+    private func use(_ item: String) {
+        query = item
+        remember()
+        runSearch()
+        fieldFocused = true
+    }
+
+    private func remember() {
+        recent = RecentSearches.add(query, to: recent)
+    }
+}
+
+/// Recent queries, kept in UserDefaults as a per-user convenience.
+enum RecentSearches {
+    private static let key = "RecentSearches"
+    static let limit = 15
+
+    static func load() -> [String] { UserDefaults.standard.stringArray(forKey: key) ?? [] }
+
+    static func save(_ items: [String]) { UserDefaults.standard.set(items, forKey: key) }
+
+    static func add(_ query: String, to list: [String]) -> [String] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return list }
+        let updated = Array(([q] + list.filter { $0.caseInsensitiveCompare(q) != .orderedSame }).prefix(limit))
+        save(updated)
+        return updated
     }
 }
 

@@ -24,6 +24,9 @@ public actor AIJobQueue {
     private var status = QueueStatus()
     private var aiPaused = false
     private var wakeGeneration = 0
+    /// Interactive requests (e.g. Ask) in flight. Background AI work isn't claimed meanwhile, so a
+    /// single-slot local server like LM Studio answers the user next instead of after the backlog.
+    private var interactiveHolds = 0
 
     public var onStatus: (@Sendable (QueueStatus) -> Void)?
 
@@ -59,6 +62,13 @@ public actor AIJobQueue {
         healthTask?.cancel()
         healthTask = nil
         wake()
+    }
+
+    public func beginInteractive() { interactiveHolds += 1 }
+
+    public func endInteractive() {
+        interactiveHolds = max(0, interactiveHolds - 1)
+        if interactiveHolds == 0 { wake() }
     }
 
     public func setAIPaused(_ paused: Bool) {
@@ -99,7 +109,7 @@ public actor AIJobQueue {
     private func allowedAITypes() -> Set<JobType> {
         let s = settings()
         // Nothing goes to a remote provider until the user has approved that destination.
-        guard !aiPaused, status.providerReachable, s.aiTransmissionAllowed else { return [] }
+        guard !aiPaused, interactiveHolds == 0, status.providerReachable, s.aiTransmissionAllowed else { return [] }
         var types: Set<JobType> = []
         if !s.visionModel.isEmpty || !s.summaryModel.isEmpty { types.insert(.visionAnalysis) }
         if !s.embeddingModel.isEmpty { types.insert(.embedding) }

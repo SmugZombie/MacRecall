@@ -36,7 +36,7 @@ struct TimelineView: View {
         .navigationTitle(title)
         .inspector(isPresented: Binding(get: { selectedCaptureID != nil }, set: { if !$0 { selectedCaptureID = nil } })) {
             if let id = selectedCaptureID {
-                CaptureDetailView(captureID: id, onSelect: { selectedCaptureID = $0 })
+                CaptureDetailView(captureID: id, onClose: { selectedCaptureID = nil }, onSelect: { selectedCaptureID = $0 })
                     .inspectorColumnWidth(min: 380, ideal: 520, max: 900)
             }
         }
