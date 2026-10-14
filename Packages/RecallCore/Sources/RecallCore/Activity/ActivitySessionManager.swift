@@ -51,13 +51,27 @@ public struct ActivitySessionManager: Sendable {
         return pending.count
     }
 
-    /// Enqueues AI summaries for recently closed sessions that don't have one.
+    /// After a summary job exhausts its retries, wait this long before scheduling another round.
+    public var failedSummaryCooldown: TimeInterval = 60 * 60
+    /// Stop rescheduling after this many failed rounds (e.g. the model is permanently unavailable).
+    public var maxFailedSummaryRounds = 3
+
+    /// Enqueues AI summaries for recently closed sessions that don't have one, including sessions
+    /// whose earlier attempt failed (after a cooldown, a bounded number of times).
     func scheduleSummaries(now: Date) throws {
         let rows = try store.db.query("""
-            SELECT id FROM sessions WHERE summary = '' AND ended_at < ? AND ended_at > ?
-            AND id NOT IN (SELECT entity_id FROM ai_jobs WHERE entity_type = 'session' AND job_type = 'session_summary')
-            ORDER BY ended_at DESC LIMIT 50
-            """, [now.addingTimeInterval(-closeAfter), now.addingTimeInterval(-14 * 86400)])
+            SELECT s.id FROM sessions s
+            WHERE s.summary = '' AND s.ended_at < ? AND s.ended_at > ?
+            AND NOT EXISTS (
+                SELECT 1 FROM ai_jobs j
+                WHERE j.entity_type = 'session' AND j.entity_id = s.id AND j.job_type = 'session_summary'
+                AND (j.status IN ('pending', 'running', 'done') OR (j.status = 'failed' AND j.completed_at > ?)))
+            AND (SELECT COUNT(*) FROM ai_jobs j
+                 WHERE j.entity_type = 'session' AND j.entity_id = s.id AND j.job_type = 'session_summary'
+                 AND j.status = 'failed') < ?
+            ORDER BY s.ended_at DESC LIMIT 50
+            """, [now.addingTimeInterval(-closeAfter), now.addingTimeInterval(-14 * 86400),
+                  now.addingTimeInterval(-failedSummaryCooldown), maxFailedSummaryRounds])
         for row in rows {
             if let id = row.int("id") {
                 try store.enqueueJob(.sessionSummary, entityType: "session", entityID: id, priority: 8)

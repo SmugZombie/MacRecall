@@ -168,14 +168,16 @@ final class AppState: ObservableObject {
     // MARK: Capture context
 
     private func captureContext() -> CaptureContext {
-        CaptureContext(
+        // Live session state backs up the notification-driven flags, which can miss a transition.
+        let live = SystemStateMonitor.liveState()
+        return CaptureContext(
             recordingEnabled: settings.recordingEnabled && !manuallyPaused,
             pausedUntil: pausedUntil,
-            screenLocked: monitor.screenLocked || monitor.screensAsleep,
+            screenLocked: monitor.screenLocked || monitor.screensAsleep || live.locked || live.displaysAsleep,
             systemAsleep: monitor.asleep,
             userIdle: monitor.userIdle,
             onBattery: settings.pauseOnBattery && SystemStateMonitor.onBatteryPower,
-            sessionActive: monitor.sessionActive,
+            sessionActive: monitor.sessionActive && live.onConsole,
             hasScreenCapturePermission: hasScreenPermission,
             secureInputActive: SystemStateMonitor.secureInputActive,
             frontmostBundleIdentifier: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)

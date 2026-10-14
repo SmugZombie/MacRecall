@@ -33,6 +33,13 @@ public final class SystemStateMonitor {
     public init() {}
 
     public func start() {
+        // Notifications only report changes; read the current state so a launch while locked,
+        // on a switched-out session, or with displays asleep starts out correct.
+        let live = Self.liveState()
+        screenLocked = live.locked
+        sessionActive = live.onConsole
+        screensAsleep = live.displaysAsleep
+
         let ws = NSWorkspace.shared.notificationCenter
         let dist = DistributedNotificationCenter.default()
         observe(ws, NSWorkspace.didActivateApplicationNotification) { [weak self] note in
@@ -49,7 +56,10 @@ public final class SystemStateMonitor {
         observe(dist, Notification.Name("com.apple.screenIsUnlocked")) { [weak self] _ in self?.screenLocked = false; self?.emit(.screenUnlocked) }
 
         idleTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.checkIdle() }
+            MainActor.assumeIsolated {
+                self?.reconcile()
+                self?.checkIdle()
+            }
         }
     }
 
@@ -68,6 +78,53 @@ public final class SystemStateMonitor {
     }
 
     private func emit(_ event: Event) { onEvent?(event) }
+
+    /// Corrects state from the live session in case a notification was missed.
+    private func reconcile() {
+        let live = Self.liveState()
+        if live.locked != screenLocked {
+            screenLocked = live.locked
+            emit(live.locked ? .screenLocked : .screenUnlocked)
+        }
+        if live.onConsole != sessionActive {
+            sessionActive = live.onConsole
+            emit(live.onConsole ? .sessionBecameActive : .sessionResigned)
+        }
+        if live.displaysAsleep != screensAsleep {
+            screensAsleep = live.displaysAsleep
+            emit(live.displaysAsleep ? .screensSlept : .screensWoke)
+        }
+        // This timer only fires while the system runs. If displays are awake but we still think the
+        // system is asleep, the wake notification was missed. (During a dark wake displays stay asleep.)
+        if asleep && !live.displaysAsleep {
+            asleep = false
+            emit(.didWake)
+        }
+    }
+
+    public struct LiveState: Equatable, Sendable {
+        public var locked: Bool
+        public var onConsole: Bool
+        public var displaysAsleep: Bool
+    }
+
+    public nonisolated static func liveState() -> LiveState {
+        let info = CGSessionCopyCurrentDictionary() as? [String: Any]
+        return LiveState(locked: isLocked(sessionInfo: info), onConsole: isOnConsole(sessionInfo: info),
+                         displaysAsleep: CGDisplayIsAsleep(CGMainDisplayID()) != 0)
+    }
+
+    /// Fails safe: no session information is treated as locked.
+    nonisolated static func isLocked(sessionInfo: [String: Any]?) -> Bool {
+        guard let info = sessionInfo else { return true }
+        if (info["CGSSessionScreenIsLocked"] as? Bool) == true { return true }
+        return !isOnConsole(sessionInfo: info)
+    }
+
+    nonisolated static func isOnConsole(sessionInfo: [String: Any]?) -> Bool {
+        guard let info = sessionInfo else { return false }
+        return (info[kCGSessionOnConsoleKey as String] as? Bool) ?? true
+    }
 
     private func checkIdle() {
         let idleFor = Self.secondsSinceLastInput

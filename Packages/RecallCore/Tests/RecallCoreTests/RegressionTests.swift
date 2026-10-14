@@ -122,3 +122,118 @@ import Testing
         }
     }
 }
+
+@Suite struct SummarySchedulingTests {
+    func pendingSummaries(_ store: RecallStore) throws -> Int {
+        Int(try store.db.scalarInt("SELECT COUNT(*) FROM ai_jobs WHERE job_type = 'session_summary' AND status = 'pending'"))
+    }
+
+    func failRound(_ store: RecallStore, at date: Date) throws {
+        let job = try #require(try store.claimJobs(types: [.sessionSummary], limit: 1, now: date).first)
+        try store.failJob(id: job.id, error: "model unavailable", retryable: false, now: date)
+    }
+
+    @Test func failedSummariesAreRescheduledAfterCooldownAndBounded() throws {
+        let store = try makeStore()
+        let t0 = Date().addingTimeInterval(-3 * 86400)
+        let c = try addCapture(store, at: t0)
+        _ = try store.createSession(start: t0, end: t0.addingTimeInterval(60), title: "x", activeSeconds: 60, captureIDs: [c.id])
+        let manager = ActivitySessionManager(store: store)
+
+        // Jobs are enqueued at the real current time, so simulated time starts now and moves forward.
+        var now = Date().addingTimeInterval(1)
+        try manager.scheduleSummaries(now: now)
+        #expect(try pendingSummaries(store) == 1)
+        try manager.scheduleSummaries(now: now)
+        #expect(try pendingSummaries(store) == 1)  // no duplicates while one is pending
+
+        for round in 1...3 {
+            try failRound(store, at: now)
+            try manager.scheduleSummaries(now: now.addingTimeInterval(60))
+            #expect(try pendingSummaries(store) == 0)  // cooling down
+            now = now.addingTimeInterval(2 * 3600)
+            try manager.scheduleSummaries(now: now)
+            #expect(try pendingSummaries(store) == (round < 3 ? 1 : 0))  // retried, until the round limit
+        }
+    }
+
+    @Test func summarizedSessionsAreNotRescheduled() throws {
+        let store = try makeStore()
+        let t0 = Date().addingTimeInterval(-86400)
+        let c = try addCapture(store, at: t0)
+        let sid = try store.createSession(start: t0, end: t0, title: "x", activeSeconds: 0, captureIDs: [c.id])
+        try store.applyAISessionResult(id: sid, title: "Done", summary: "Something happened.", confidence: 0.9)
+        try ActivitySessionManager(store: store).scheduleSummaries(now: Date())
+        #expect(try pendingSummaries(store) == 0)
+    }
+}
+
+@Suite struct WindowMatchingTests {
+    typealias R = ActiveWindowResolver
+    func ax(_ title: String?, _ frame: CGRect?, minimized: Bool = false) -> R.FocusState {
+        .focused(R.AXWindowInfo(title: title, frame: frame, minimized: minimized))
+    }
+    let frame = CGRect(x: 100, y: 80, width: 1200, height: 800)
+
+    @Test func toleratesSmallFrameDifferences() {
+        let c = [R.WindowCandidate(id: 1, title: "a", frame: frame.offsetBy(dx: 0.5, dy: 4).insetBy(dx: 0, dy: -2), zIndex: 0)]
+        #expect(R.match(focus: ax("a", frame), accessibilityAvailable: true, candidates: c) == .window(1, method: "ax_frame"))
+    }
+
+    @Test func prefersClosestFrame() {
+        let c = [R.WindowCandidate(id: 1, title: "x", frame: frame.offsetBy(dx: 15, dy: 0), zIndex: 0),
+                 R.WindowCandidate(id: 2, title: "x", frame: frame, zIndex: 1)]
+        #expect(R.match(focus: ax("x", frame), accessibilityAvailable: true, candidates: c) == .window(2, method: "ax_frame"))
+    }
+
+    @Test func sameTitleAndFrameUsesZOrder() {
+        // Two browser windows stacked exactly, both titled "New Tab": the focused one is frontmost.
+        let c = [R.WindowCandidate(id: 7, title: "New Tab", frame: frame, zIndex: 3),
+                 R.WindowCandidate(id: 9, title: "New Tab", frame: frame, zIndex: 1)]
+        #expect(R.match(focus: ax("New Tab", frame), accessibilityAvailable: true, candidates: c) == .window(9, method: "ax_frame_z"))
+    }
+
+    @Test func titleOnlyMatchUsesZOrderForDuplicates() {
+        let c = [R.WindowCandidate(id: 1, title: "main.swift", frame: .zero, zIndex: 2),
+                 R.WindowCandidate(id: 2, title: "main.swift", frame: CGRect(x: 0, y: 0, width: 50, height: 50), zIndex: 0)]
+        #expect(R.match(focus: ax("main.swift", nil), accessibilityAvailable: true, candidates: c) == .window(2, method: "ax_title_z"))
+    }
+
+    @Test func frameMatchPrefersTitleAmongEqualFits() {
+        let c = [R.WindowCandidate(id: 1, title: "Inbox", frame: frame, zIndex: 0),
+                 R.WindowCandidate(id: 2, title: "Draft", frame: frame, zIndex: 1)]
+        // The title narrows equal fits to one window, so z-order isn't needed.
+        #expect(R.match(focus: ax("Draft", frame), accessibilityAvailable: true, candidates: c) == .window(2, method: "ax_frame"))
+    }
+
+    @Test func unmatchedFocusIsSkippedNotGuessed() {
+        let c = [R.WindowCandidate(id: 1, title: "Other", frame: frame.offsetBy(dx: 400, dy: 0), zIndex: 0)]
+        #expect(R.match(focus: ax("Secret", frame), accessibilityAvailable: true, candidates: c)
+            == .skip(.windowNotShareable, detail: "focused window not matched to a capturable window"))
+        #expect(R.match(focus: ax("a", frame, minimized: true), accessibilityAvailable: true, candidates: c)
+            == .skip(.noFocusedWindow, detail: "focused window minimized"))
+    }
+
+    @Test func withoutAccessibilityUsesFrontmost() {
+        let c = [R.WindowCandidate(id: 1, title: nil, frame: frame, zIndex: 4),
+                 R.WindowCandidate(id: 2, title: nil, frame: frame, zIndex: 0),
+                 R.WindowCandidate(id: 3, title: nil, frame: frame, zIndex: nil)]
+        #expect(R.match(focus: .unknown, accessibilityAvailable: false, candidates: c) == .window(2, method: "z_order"))
+        #expect(R.match(focus: .noFocusedWindow, accessibilityAvailable: true, candidates: c)
+            == .skip(.noFocusedWindow, detail: "no AX focused window"))
+    }
+}
+
+@Suite struct SessionStateTests {
+    @Test func lockDetectionFailsSafe() {
+        #expect(SystemStateMonitor.isLocked(sessionInfo: nil))
+        #expect(SystemStateMonitor.isLocked(sessionInfo: ["CGSSessionScreenIsLocked": true, kCGSessionOnConsoleKey as String: true]))
+        #expect(SystemStateMonitor.isLocked(sessionInfo: [kCGSessionOnConsoleKey as String: false]))
+        #expect(!SystemStateMonitor.isLocked(sessionInfo: [kCGSessionOnConsoleKey as String: true]))
+    }
+
+    @Test func liveStateReadsWithoutCrashing() {
+        // Under the test runner there may be no GUI session; whatever it reports must be well-formed.
+        _ = SystemStateMonitor.liveState()
+    }
+}
