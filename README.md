@@ -1,5 +1,7 @@
 # Recall for macOS
 
+**Website:** https://smugzombie.github.io/MacRecall/ · **Download:** [latest release](https://github.com/SmugZombie/MacRecall/releases/latest)
+
 A native, local-first activity history for macOS. Recall captures the **focused window** at a regular interval, extracts text with Apple Vision, groups captures into work sessions, and makes everything searchable — by keyword out of the box, and with AI descriptions, summaries and semantic search when an AI provider is configured: [Ollama](https://ollama.com) or [LM Studio](https://lmstudio.ai) on your Mac, or OpenAI / Amazon Bedrock in the cloud.
 
 Everything is stored under `~/Library/Application Support/RecallForMac/`, with history in a `Data.noindex` folder so Spotlight never indexes your screenshots or the text inside them. There is no telemetry, account or cloud sync; the only network traffic is to the AI provider you configure, and remote providers stay paused until you explicitly approve them.
@@ -51,7 +53,7 @@ Recall checks GitHub Releases for this repository once a day (and from **Check f
 4. Verify its code signature against the running app's own Team ID and bundle identifier (`anchor apple generic and identifier … and certificate leaf[subject.OU] = <team>`). A build signed by anyone else is refused.
 5. Swap the bundle and relaunch.
 
-Self-update is disabled for development builds (DerivedData), unsigned or ad hoc builds, and install locations Recall can't write to. Those get a download link instead. While the repository is private, the releases API needs a fine-grained GitHub token with read-only **Contents** access, entered in Settings → General → Updates and stored in the keychain. Automatic checks can be turned off there.
+Self-update is disabled for development builds (DerivedData), unsigned or ad hoc builds, and install locations Recall can't write to. Those get a download link instead. Automatic checks can be turned off in Settings → General → Updates. A GitHub token there is only needed if you build from a private fork.
 
 ## Architecture
 

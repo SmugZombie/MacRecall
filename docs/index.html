@@ -1,0 +1,375 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Recall for macOS</title>
+<meta name="description" content="A private, searchable history of what you worked on. Recall captures the focused window, reads its text on-device, and lets you find anything you saw — stored only on your Mac.">
+<meta property="og:title" content="Recall for macOS">
+<meta property="og:description" content="A private, searchable history of what you worked on — stored only on your Mac.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://smugzombie.github.io/MacRecall/">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2330a46c'/%3E%3Cpath d='M32 14a18 18 0 1 1-16.6 11' fill='none' stroke='white' stroke-width='5' stroke-linecap='round'/%3E%3Cpath d='M12 18l3.5 8 8-3' fill='none' stroke='white' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M32 22v11l7 5' fill='none' stroke='white' stroke-width='5' stroke-linecap='round'/%3E%3C/svg%3E">
+<style>
+:root {
+  --bg: #fbfaf7;
+  --bg-raised: #ffffff;
+  --bg-sunken: #f2f0ea;
+  --text: #1b1d1c;
+  --text-2: #55595a;
+  --text-3: #868a8a;
+  --line: #e3e0d8;
+  --accent: #23845a;
+  --accent-ink: #ffffff;
+  --accent-soft: #e2f2ea;
+  --warn: #a8641a;
+  --warn-soft: #fbefdf;
+  --shadow: 0 1px 2px rgba(20,24,22,.06), 0 8px 28px rgba(20,24,22,.08);
+  --radius: 14px;
+  --mono: ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #121413;
+    --bg-raised: #1a1d1c;
+    --bg-sunken: #0d0f0e;
+    --text: #ecefed;
+    --text-2: #aab1ae;
+    --text-3: #7a817e;
+    --line: #2a2f2d;
+    --accent: #3cc287;
+    --accent-ink: #08130e;
+    --accent-soft: #15301f;
+    --warn: #e2a253;
+    --warn-soft: #2c2113;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.35);
+  }
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 17px/1.6 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code, kbd { font-family: var(--mono); font-size: .88em; }
+kbd { padding: 1px 6px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 6px; background: var(--bg-raised); }
+.wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+@media (max-width: 600px) { .wrap { padding: 0 16px; } body { font-size: 16px; } }
+
+/* Nav */
+nav { position: sticky; top: 0; z-index: 10; background: color-mix(in srgb, var(--bg) 85%, transparent);
+  backdrop-filter: saturate(1.4) blur(14px); -webkit-backdrop-filter: saturate(1.4) blur(14px); border-bottom: 1px solid var(--line); }
+nav .wrap { display: flex; align-items: center; gap: 24px; height: 60px; }
+.brand { display: flex; align-items: center; gap: 10px; color: var(--text); font-weight: 650; letter-spacing: -.01em; }
+.brand:hover { text-decoration: none; }
+.brand svg { width: 28px; height: 28px; }
+nav .links { display: flex; gap: 22px; margin-left: auto; font-size: 15px; }
+nav .links a { color: var(--text-2); }
+nav .links a:hover { color: var(--text); text-decoration: none; }
+@media (max-width: 760px) { nav .links a.optional { display: none; } }
+
+/* Buttons */
+.btn { display: inline-flex; align-items: center; gap: 8px; padding: 12px 20px; border-radius: 999px; font-weight: 600; font-size: 16px;
+  border: 1px solid transparent; transition: transform .12s ease, background .12s ease; }
+.btn:hover { text-decoration: none; transform: translateY(-1px); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); }
+.btn.secondary { border-color: var(--line); color: var(--text); background: var(--bg-raised); }
+.btn svg { width: 18px; height: 18px; }
+
+/* Hero */
+.hero { padding: 84px 0 56px; }
+.hero .wrap { display: grid; grid-template-columns: 1.05fr 1fr; gap: 56px; align-items: center; }
+@media (max-width: 900px) { .hero .wrap { grid-template-columns: 1fr; gap: 40px; } .hero { padding-top: 48px; } }
+.eyebrow { display: inline-block; font-size: 13px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--accent);
+  background: var(--accent-soft); padding: 4px 10px; border-radius: 999px; }
+h1 { font-size: clamp(38px, 5.6vw, 60px); line-height: 1.04; letter-spacing: -.035em; margin: 18px 0 18px; font-weight: 750; }
+.lede { font-size: 19px; color: var(--text-2); margin: 0 0 30px; max-width: 34em; }
+.cta { display: flex; flex-wrap: wrap; gap: 12px; }
+.meta { margin-top: 16px; font-size: 14px; color: var(--text-3); }
+
+/* Timeline mock */
+.mock { background: var(--bg-raised); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow); overflow: hidden; }
+.mock-bar { display: flex; align-items: center; gap: 7px; padding: 12px 14px; border-bottom: 1px solid var(--line); background: var(--bg-sunken); }
+.mock-bar i { width: 11px; height: 11px; border-radius: 50%; background: var(--line); display: block; }
+.mock-bar span { margin-left: 10px; font-size: 13px; color: var(--text-3); font-weight: 600; }
+.mock-search { margin: 14px 16px 6px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; font-size: 14px; color: var(--text-2); display: flex; gap: 8px; align-items: center; }
+.mock-search b { color: var(--text); font-weight: 500; }
+.pills { display: flex; gap: 6px; margin: 4px 16px 10px; flex-wrap: wrap; }
+.pill { font-size: 11.5px; padding: 2px 8px; border-radius: 999px; background: var(--bg-sunken); color: var(--text-2); }
+.pill.g { background: var(--accent-soft); color: var(--accent); }
+.session { display: grid; grid-template-columns: 92px 1fr; gap: 12px; padding: 12px 16px; border-top: 1px solid var(--line); }
+.thumb { height: 58px; border-radius: 6px; background: var(--bg-sunken); border: 1px solid var(--line); position: relative; overflow: hidden; }
+.thumb::before, .thumb::after { content: ""; position: absolute; left: 8px; height: 4px; border-radius: 2px; background: var(--line); }
+.thumb::before { top: 12px; width: 60%; } .thumb::after { top: 22px; width: 40%; }
+.thumb.term { background: #1d2120; } .thumb.term::before { background: #3cc287; width: 50%; } .thumb.term::after { background: #e2a253; width: 70%; }
+.s-time { font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.s-title { font-weight: 620; font-size: 14.5px; margin: 1px 0 2px; }
+.s-sum { font-size: 13px; color: var(--text-2); line-height: 1.45; }
+.s-sum mark { background: color-mix(in srgb, #f4c430 35%, transparent); color: inherit; border-radius: 3px; padding: 0 2px; }
+.answer { margin: 10px 16px 16px; padding: 12px 14px; border-radius: 10px; background: var(--accent-soft); font-size: 13.5px; line-height: 1.5; }
+.answer cite { font-style: normal; font-family: var(--mono); font-size: 12px; color: var(--accent); }
+
+/* Sections */
+section { padding: 72px 0; }
+section.alt { background: var(--bg-sunken); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+h2 { font-size: clamp(28px, 3.6vw, 38px); letter-spacing: -.025em; line-height: 1.12; margin: 0 0 12px; font-weight: 720; }
+.section-lede { color: var(--text-2); font-size: 18px; max-width: 40em; margin: 0 0 40px; }
+.grid { display: grid; gap: 18px; grid-template-columns: repeat(3, 1fr); }
+@media (max-width: 900px) { .grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 600px) { .grid { grid-template-columns: 1fr; } }
+.card { background: var(--bg-raised); border: 1px solid var(--line); border-radius: var(--radius); padding: 22px; }
+.card h3 { margin: 12px 0 6px; font-size: 17px; letter-spacing: -.01em; }
+.card p { margin: 0; color: var(--text-2); font-size: 15px; line-height: 1.55; }
+.icon { width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); }
+.icon svg { width: 21px; height: 21px; }
+
+/* Privacy list */
+.checks { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px 40px; padding: 0; margin: 0; list-style: none; }
+@media (max-width: 700px) { .checks { grid-template-columns: 1fr; } }
+.checks li { display: grid; grid-template-columns: 24px 1fr; gap: 10px; }
+.checks li::before { content: ""; width: 20px; height: 20px; margin-top: 3px; border-radius: 50%; background: var(--accent-soft)
+  url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M5.5 10.5l3 3 6-7' fill='none' stroke='%2323845a' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/16px no-repeat; }
+.checks li > div > b { display: block; font-weight: 620; }
+.checks span { color: var(--text-2); font-size: 15px; }
+
+/* Providers */
+.providers { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+@media (max-width: 900px) { .providers { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 520px) { .providers { grid-template-columns: 1fr; } }
+.provider { padding: 18px; }
+.provider .tag { font-size: 11.5px; font-weight: 650; text-transform: uppercase; letter-spacing: .05em; }
+.tag.local { color: var(--accent); } .tag.cloud { color: var(--warn); }
+.provider h3 { margin: 6px 0 4px; }
+
+/* Steps */
+.steps { counter-reset: step; display: grid; gap: 14px; padding: 0; margin: 0; list-style: none; }
+.steps li { counter-increment: step; display: grid; grid-template-columns: 34px 1fr; gap: 14px; align-items: start; }
+.steps li::before { content: counter(step); width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--accent); color: var(--accent-ink); font-weight: 700; font-size: 14px; }
+.steps li > div > b { display: block; }
+.steps span { color: var(--text-2); font-size: 15px; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; align-items: start; }
+@media (max-width: 860px) { .two { grid-template-columns: 1fr; gap: 32px; } }
+.note { border: 1px solid color-mix(in srgb, var(--warn) 35%, var(--line)); background: var(--warn-soft); border-radius: 12px; padding: 14px 16px; font-size: 15px; color: var(--text); }
+.note b { color: var(--warn); }
+pre { background: var(--bg-raised); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; overflow-x: auto; font-size: 13.5px; line-height: 1.55; margin: 0; }
+
+/* FAQ */
+details { border-bottom: 1px solid var(--line); padding: 16px 0; }
+details:first-of-type { border-top: 1px solid var(--line); }
+summary { cursor: pointer; font-weight: 600; list-style: none; display: flex; justify-content: space-between; gap: 16px; }
+summary::-webkit-details-marker { display: none; }
+summary::after { content: "+"; color: var(--text-3); font-weight: 400; font-size: 22px; line-height: 1; }
+details[open] summary::after { content: "–"; }
+details p { color: var(--text-2); margin: 10px 0 0; font-size: 15.5px; }
+
+footer { padding: 40px 0 56px; color: var(--text-3); font-size: 14px; }
+footer .wrap { display: flex; flex-wrap: wrap; gap: 16px 28px; align-items: center; }
+footer .spacer { flex: 1; }
+.sha { font-family: var(--mono); font-size: 12px; color: var(--text-3); word-break: break-all; }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="#">
+      <svg viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="14" fill="#30a46c"/><path d="M32 14a18 18 0 1 1-16.6 11" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round"/><path d="M12 18l3.5 8 8-3" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/><path d="M32 22v11l7 5" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round"/></svg>
+      Recall
+    </a>
+    <div class="links">
+      <a class="optional" href="#features">Features</a>
+      <a class="optional" href="#privacy">Privacy</a>
+      <a class="optional" href="#ai">AI</a>
+      <a href="#install">Install</a>
+      <a href="https://github.com/SmugZombie/MacRecall">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <div>
+      <span class="eyebrow">For macOS 14 and later</span>
+      <h1>Find anything you saw on your Mac.</h1>
+      <p class="lede">Recall keeps a private, searchable history of what you worked on. It captures the window you're using, reads its text on-device, groups your day into sessions, and answers questions with links back to the exact screenshot. All of it stays on your Mac.</p>
+      <div class="cta">
+        <a class="btn primary" id="download" href="https://github.com/SmugZombie/MacRecall/releases/latest">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3v10M5.5 8.5 10 13l4.5-4.5M4 16.5h12"/></svg>
+          <span id="download-label">Download for Mac</span>
+        </a>
+        <a class="btn secondary" href="https://github.com/SmugZombie/MacRecall">View source</a>
+      </div>
+      <p class="meta" id="release-meta">Apple silicon and Intel · macOS 14 Sonoma or later</p>
+    </div>
+
+    <div class="mock" role="img" aria-label="Illustration of Recall's search: a query for a PostgreSQL error yesterday, matching sessions, and a cited answer.">
+      <div class="mock-bar"><i></i><i></i><i></i><span>Search</span></div>
+      <div class="mock-search">⌕ <b>where did I see the postgres error yesterday?</b></div>
+      <div class="pills"><span class="pill">Yesterday</span><span class="pill">terms: postgres error</span><span class="pill g">keyword + semantic</span></div>
+      <div class="answer">You hit <b>connection refused</b> from <code>psql</code> in Terminal at 10:12 while running Docker Compose, after reading the PostgreSQL connection docs. <cite>[C412] [S38]</cite></div>
+      <div class="session">
+        <div class="thumb term"></div>
+        <div>
+          <div class="s-time">10:00 – 10:15 · 14m active</div>
+          <div class="s-title">Backend development and PostgreSQL troubleshooting</div>
+          <div class="s-sum">Terminal · <mark>psql: error</mark>: connection to server at "db" failed…</div>
+        </div>
+      </div>
+      <div class="session">
+        <div class="thumb"></div>
+        <div>
+          <div class="s-time">10:09 · Safari</div>
+          <div class="s-title">PostgreSQL: Documentation — Connection settings</div>
+          <div class="s-sum">listen_addresses, port, max_connections…</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<section id="features" class="alt">
+  <div class="wrap">
+    <h2>Your work, reconstructed.</h2>
+    <p class="section-lede">Recall answers "what was I doing, when, and where did I see it?" without you having to remember the exact words.</p>
+    <div class="grid">
+      <div class="card">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 9h18"/></svg></div>
+        <h3>Focused window only</h3>
+        <p>Captures just the window you're working in, every 30 seconds and when you switch, never the whole screen. Unchanged frames are detected and skipped.</p>
+      </div>
+      <div class="card">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7V5a1 1 0 0 1 1-1h2M17 4h2a1 1 0 0 1 1 1v2M20 17v2a1 1 0 0 1-1 1h-2M7 20H5a1 1 0 0 1-1-1v-2M8 9h8M8 12h8M8 15h5"/></svg></div>
+        <h3>On-device text recognition</h3>
+        <p>Apple Vision reads file paths, terminal output, error messages and URLs, so they're searchable within seconds. No AI or network needed.</p>
+      </div>
+      <div class="card">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h10M4 18h7"/></svg></div>
+        <h3>Sessions, not snapshots</h3>
+        <p>Screenshots are grouped into work sessions automatically. A quick glance at chat doesn't break your flow. Rename, merge, split or edit any of it.</p>
+      </div>
+      <div class="card">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg></div>
+        <h3>Search that understands you</h3>
+        <p>"Before lunch yesterday", "last Tuesday" and "the terminal" become filters. Keyword and semantic matches are combined, and answers cite real screenshots.</p>
+      </div>
+      <div class="card">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></div>
+        <h3>Projects and daily summaries</h3>
+        <p>Associate activity with projects by keyword, repo path or domain, and get a daily Markdown summary of where your time actually went.</p>
+      </div>
+      <div class="card">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M10 9v6M14 9v6"/></svg></div>
+        <h3>Out of your way</h3>
+        <p>Lives in the menu bar. Pause anywhere with <kbd>⌃⌥⌘P</kbd> or for 15 minutes to 4 hours, and see at a glance whether it's recording.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="privacy">
+  <div class="wrap">
+    <h2>Private by design, not by setting.</h2>
+    <p class="section-lede">A history of your screen is sensitive. Recall is built so the safe behavior is the default, and when something can't be checked, it fails closed.</p>
+    <ul class="checks">
+      <li><div><b>Stored only on your Mac</b><span>No account, cloud sync or telemetry. History lives in a folder Spotlight never indexes and Time Machine skips.</span></div></li>
+      <li><div><b>Sensitive apps and fields skipped</b><span>Password managers are excluded before any pixels are read. Password fields (secure input) are never captured.</span></div></li>
+      <li><div><b>Secrets redacted before saving</b><span>API keys, tokens, private keys and card numbers are blacked out in the image and text. If text can't be checked, the frame is discarded.</span></div></li>
+      <li><div><b>Nothing leaves without your approval</b><span>Cloud or remote AI receives nothing until you approve that exact destination. Redirects to other servers are refused.</span></div></li>
+      <li><div><b>Pauses when you're away</b><span>No capture while the screen is locked, the display sleeps, you're idle, or (optionally) you're on battery.</span></div></li>
+      <li><div><b>You control retention</b><span>Old history is deleted automatically after the number of days you choose. Delete the last hour, a date range, AI data or everything, any time.</span></div></li>
+    </ul>
+  </div>
+</section>
+
+<section id="ai" class="alt">
+  <div class="wrap">
+    <h2>Bring your own AI, or none at all.</h2>
+    <p class="section-lede">Capture, text recognition, the timeline and keyword search work without AI. Add a provider for screenshot descriptions, session summaries, semantic search and grounded answers.</p>
+    <div class="providers">
+      <div class="card provider"><span class="tag local">On your Mac</span><h3>Ollama</h3><p>Local models served by Ollama, such as Qwen2.5-VL for vision and nomic-embed-text for search.</p></div>
+      <div class="card provider"><span class="tag local">On your Mac</span><h3>LM Studio</h3><p>LM Studio's local server, with model types detected automatically.</p></div>
+      <div class="card provider"><span class="tag cloud">Cloud · needs approval</span><h3>OpenAI</h3><p>OpenAI or any OpenAI-compatible API. Your key is stored in the macOS keychain.</p></div>
+      <div class="card provider"><span class="tag cloud">Cloud · needs approval</span><h3>Amazon Bedrock</h3><p>Your AWS account, using a Bedrock API key, access keys or an AWS CLI profile (SSO works too).</p></div>
+    </div>
+    <p class="meta" style="margin-top:22px">AI answers may only state what's in your captured history, and every claim must link to a real screenshot or session. If the evidence isn't there, Recall says so.</p>
+  </div>
+</section>
+
+<section id="install">
+  <div class="wrap two">
+    <div>
+      <h2>Install</h2>
+      <ol class="steps">
+        <li><div><b>Download and unzip</b><span><a id="download-inline" href="https://github.com/SmugZombie/MacRecall/releases/latest">Get the latest release</a> and move <code>RecallForMac.app</code> to your Applications folder.</span></div></li>
+        <li><div><b>Open it</b><span>The first time, right-click the app and choose <b>Open</b> (see the note below).</span></div></li>
+        <li><div><b>Grant permissions</b><span><b>Screen Recording</b> is required. <b>Accessibility</b> is recommended so Recall can identify exactly which window has focus.</span></div></li>
+        <li><div><b>Optionally pick an AI provider</b><span>In Settings → AI. Everything else already works without one.</span></div></li>
+      </ol>
+    </div>
+    <div>
+      <div class="note"><b>Not notarized yet.</b> Releases are signed with a Developer ID but haven't been through Apple notarization, so macOS may block the first launch. Right-click → <b>Open</b>, or allow it in System Settings → Privacy &amp; Security.</div>
+      <h3 style="margin:28px 0 8px">Updates</h3>
+      <p style="color:var(--text-2);margin:0 0 12px;font-size:15.5px">Recall checks for new releases once a day and can install them itself. Before installing, it verifies the download's checksum and that it's signed by the same developer. You can turn this off in Settings.</p>
+      <h3 style="margin:28px 0 8px">Build from source</h3>
+      <pre><code>git clone https://github.com/SmugZombie/MacRecall
+cd MacRecall
+open RecallForMac.xcodeproj        # then ⌘R
+
+cd Packages/RecallCore && swift test</code></pre>
+      <p class="sha" id="sha"></p>
+    </div>
+  </div>
+</section>
+
+<section class="alt">
+  <div class="wrap">
+    <h2>Questions</h2>
+    <details><summary>Does Recall record my whole screen or audio?</summary><p>No. It captures only the focused window of the app you're using, as still images. It never captures the desktop, other windows, or any audio.</p></details>
+    <details><summary>What leaves my Mac?</summary><p>By default, nothing but a daily check for new releases on GitHub, which you can turn off. If you choose a cloud or remote AI provider and approve it, screenshots and recognized text go to that provider, with redaction rules applied to the text first.</p></details>
+    <details><summary>Does it work offline?</summary><p>Yes. Capture, text recognition, the timeline and keyword search are fully local. Ollama and LM Studio keep AI features local too.</p></details>
+    <details><summary>How much disk space does it use?</summary><p>Screenshots are stored as compressed HEIC images, and unchanged frames aren't stored twice. Settings → Storage shows exact usage, and retention deletes old history automatically.</p></details>
+    <details><summary>How do I remove everything?</summary><p>Settings → Privacy → <b>Delete All History</b>. To uninstall completely, quit Recall, delete the app, and remove <code>~/Library/Application Support/RecallForMac</code>.</p></details>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>Recall for macOS</span>
+    <span class="spacer"></span>
+    <a href="https://github.com/SmugZombie/MacRecall/releases">Releases</a>
+    <a href="https://github.com/SmugZombie/MacRecall/issues">Issues</a>
+    <a href="https://github.com/SmugZombie/MacRecall">Source</a>
+  </div>
+</footer>
+
+<script>
+// Point download buttons at the latest release's app archive. Falls back to the releases page.
+(async () => {
+  try {
+    const res = await fetch("https://api.github.com/repos/SmugZombie/MacRecall/releases/latest", {
+      headers: { Accept: "application/vnd.github+json" }
+    });
+    if (!res.ok) return;
+    const release = await res.json();
+    const asset = (release.assets || []).find(a => /^RecallForMac.*\.zip$/.test(a.name));
+    const version = String(release.tag_name || "").replace(/^v/, "");
+    if (!asset || !version) return;
+    for (const id of ["download", "download-inline"]) {
+      const el = document.getElementById(id);
+      if (el) el.href = asset.browser_download_url;
+    }
+    document.getElementById("download-label").textContent = "Download " + version;
+    const size = asset.size ? " · " + (asset.size / 1048576).toFixed(1) + " MB" : "";
+    const date = release.published_at ? " · released " + new Date(release.published_at).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "";
+    document.getElementById("release-meta").textContent = "Version " + version + size + date + " · macOS 14 Sonoma or later";
+    if (asset.digest) document.getElementById("sha").textContent = "Latest release " + asset.digest;
+  } catch (_) { /* keep the fallback links */ }
+})();
+</script>
+</body>
+</html>
