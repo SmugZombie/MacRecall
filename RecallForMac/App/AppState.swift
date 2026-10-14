@@ -346,6 +346,28 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Checks the configured server and explains the result in user-facing terms.
+    func diagnoseOllama() async -> (ok: Bool, message: String) {
+        let endpoint = settings.ollamaEndpoint
+        let result: (ok: Bool, message: String)
+        do {
+            let models = try await ollama.listModels()
+            result = models.isEmpty
+                ? (true, "Connected to \(endpoint), but no models are installed. Install one with e.g. `ollama pull llama3.2`.")
+                : (true, "Connected to \(endpoint) — \(models.count) model\(models.count == 1 ? "" : "s") installed. Choose them in Settings → AI.")
+        } catch OllamaError.invalidEndpoint {
+            result = (false, "“\(endpoint)” isn't a valid URL. Fix it in Settings → AI.")
+        } catch OllamaError.unreachable {
+            result = (false, "No Ollama server is responding at \(endpoint). Install Ollama from ollama.com and start it (or run `ollama serve`), then check again. If it runs elsewhere, set the endpoint in Settings → AI.")
+        } catch {
+            result = (false, "Ollama at \(endpoint) responded with an error: \(error.localizedDescription)")
+        }
+        // Keep the menu bar / queue status in sync with what we just learned.
+        await queue?.checkHealth()
+        refreshQueue()
+        return result
+    }
+
     func checkOllama() async -> Bool {
         await queue?.checkHealth()
         refreshQueue()

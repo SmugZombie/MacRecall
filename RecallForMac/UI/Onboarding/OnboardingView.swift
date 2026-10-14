@@ -6,6 +6,8 @@ struct OnboardingView: View {
     @EnvironmentObject private var state: AppState
     @Environment(\.dismissWindow) private var dismissWindow
     @State private var ollamaOK: Bool?
+    @State private var ollamaChecking = false
+    @State private var ollamaMessage: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -35,7 +37,15 @@ struct OnboardingView: View {
             step(title: "Ollama (optional)",
                  detail: "Local AI for descriptions, summaries and semantic search. Capture, text recognition, the timeline and keyword search work without it.",
                  granted: ollamaOK ?? false,
-                 action: ("Check", { Task { ollamaOK = await state.checkOllama() } }))
+                 action: (ollamaChecking ? "Checking…" : "Check Again", { Task { await checkOllama() } }))
+            if let ollamaMessage {
+                Text(ollamaMessage)
+                    .font(.caption)
+                    .foregroundStyle(ollamaOK == true ? Color.secondary : Color.orange)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 34)
+            }
 
             Divider()
             Text("Password managers are excluded by default, password fields are never captured, and you can pause anytime with \(GlobalHotKey.displayString) or the menu bar icon.")
@@ -54,13 +64,22 @@ struct OnboardingView: View {
         .padding(28)
         .frame(width: 560)
         .task {
-            ollamaOK = await state.checkOllama()
+            await checkOllama()
             // Permissions are granted in System Settings; poll while this window is open.
             while !Task.isCancelled {
                 state.refreshPermissions()
                 try? await Task.sleep(for: .seconds(2))
             }
         }
+    }
+
+    private func checkOllama() async {
+        guard !ollamaChecking else { return }
+        ollamaChecking = true
+        defer { ollamaChecking = false }
+        let result = await state.diagnoseOllama()
+        ollamaOK = result.ok
+        ollamaMessage = result.message
     }
 
     private func step(title: String, detail: String, granted: Bool, action: (String, () -> Void)) -> some View {
