@@ -3,12 +3,20 @@ import SwiftUI
 
 struct MenuBarView: View {
     @EnvironmentObject private var state: AppState
+    @ObservedObject private var updates = UpdateController.shared
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             header
+            if let release = updates.availableRelease {
+                Button { open(WindowID.update) } label: {
+                    Label("Update available: \(release.version.description) — Install…", systemImage: "arrow.down.circle.fill")
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.tint)
+            }
             Divider()
             recordingControls
             Divider()

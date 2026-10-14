@@ -513,6 +513,7 @@ private struct GeneralSettings: View {
             Toggle("Open Recall at login", isOn: Binding(get: { state.launchAtLogin }, set: { state.setLaunchAtLogin($0) }))
             LabeledContent("Pause/resume shortcut", value: GlobalHotKey.displayString)
             Toggle("Show time zone in timestamps", isOn: $state.settings.showTimezone)
+            UpdateSettingsSection()
             Section("Permissions") {
                 LabeledContent("Screen Recording") {
                     PermissionStatus(granted: state.hasScreenPermission)
@@ -523,7 +524,7 @@ private struct GeneralSettings: View {
                 Button("Open Permission Setup…") { activateApp(); openWindow(id: WindowID.onboarding) }
             }
             Section {
-                Text("Recall stores everything locally in ~/Library/Application Support/RecallForMac. It has no telemetry, accounts or cloud sync; the only network traffic is to the AI provider you configure, and remote providers require your approval first.")
+                Text("Recall stores everything locally in ~/Library/Application Support/RecallForMac. It has no telemetry, accounts or cloud sync. Network traffic goes only to the AI provider you configure (remote providers require your approval first) and, if update checks are on, to GitHub for the latest release.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }

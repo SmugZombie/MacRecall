@@ -41,6 +41,18 @@ Choose a provider in **Settings → AI**, then pick three models: **vision** (de
 - Recall never downloads models itself.
 - If the provider is offline or rejects credentials, AI jobs wait in the durable queue without using up retries. Capture, OCR, the timeline and keyword search keep working.
 
+### Updates
+
+Recall checks GitHub Releases for this repository once a day (and from **Check for Updates…** in the app menu or Settings → General). When a newer version is out, it shows the release notes and can install it in place:
+
+1. Download the release's `RecallForMac-<version>.zip`.
+2. Check it against the SHA-256 digest GitHub publishes for the asset.
+3. Unpack it and confirm it's the same app and the advertised, newer version.
+4. Verify its code signature against the running app's own Team ID and bundle identifier (`anchor apple generic and identifier … and certificate leaf[subject.OU] = <team>`). A build signed by anyone else is refused.
+5. Swap the bundle and relaunch.
+
+Self-update is disabled for development builds (DerivedData), unsigned or ad hoc builds, and install locations Recall can't write to. Those get a download link instead. While the repository is private, the releases API needs a fine-grained GitHub token with read-only **Contents** access, entered in Settings → General → Updates and stored in the keychain. Automatic checks can be turned off there.
+
 ## Architecture
 
 ```
@@ -59,6 +71,7 @@ Packages/RecallCore/          All logic, unit-tested with `swift test`
   Activity/                   Deterministic SessionBuilder, ProjectClassifier, daily summaries
   Search/                     Query interpretation, FTS5 search, vector index, hybrid RRF, grounded Q&A
   Privacy/                    CapturePolicy, sensitive-content redaction, retention
+  Updates/                    GitHub release client, semantic versions, verified in-place installer
 ```
 
 ### Capture pipeline

@@ -10,6 +10,8 @@ public enum Keychain {
         case awsAccessKeyID = "bedrock.accessKeyID"
         case awsSecretAccessKey = "bedrock.secretAccessKey"
         case awsSessionToken = "bedrock.sessionToken"
+        /// Read-only token for checking releases of a private GitHub repository.
+        case githubToken = "github.token"
     }
 
     static let service = "RecallForMac"

@@ -39,6 +39,11 @@ public struct RecallSettings: Codable, Sendable, Equatable {
     public var requestTimeout: Double = 120
     public var aiProcessingEnabled = true
 
+    // Updates
+    public var automaticUpdateChecks = true
+    /// A version the user chose to skip; newer versions are still offered.
+    public var skippedUpdateVersion = ""
+
     // General
     public var notificationsEnabled = false
     public var showTimezone = false
@@ -120,6 +125,8 @@ public struct RecallSettings: Codable, Sendable, Equatable {
         maxConcurrentRequests = v(.maxConcurrentRequests, d.maxConcurrentRequests)
         requestTimeout = v(.requestTimeout, d.requestTimeout)
         aiProcessingEnabled = v(.aiProcessingEnabled, d.aiProcessingEnabled)
+        automaticUpdateChecks = v(.automaticUpdateChecks, d.automaticUpdateChecks)
+        skippedUpdateVersion = v(.skippedUpdateVersion, d.skippedUpdateVersion)
         notificationsEnabled = v(.notificationsEnabled, d.notificationsEnabled)
         showTimezone = v(.showTimezone, d.showTimezone)
         onboardingCompleted = v(.onboardingCompleted, d.onboardingCompleted)
