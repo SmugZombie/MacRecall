@@ -52,6 +52,8 @@ final class AppState: ObservableObject {
     @Published private(set) var queueStatus = QueueStatus()
     @Published private(set) var hasScreenPermission = ScreenshotService.hasScreenCapturePermission
     @Published private(set) var hasAccessibility = ActiveWindowResolver.accessibilityTrusted
+    /// Permission is granted but this process can't use it until it restarts.
+    @Published private(set) var needsRelaunch = false
     @Published private(set) var lastCaptureAt: Date?
     @Published private(set) var lastSkipReason: SkipReason?
     /// Bumped whenever history changes so views can reload.
@@ -180,7 +182,7 @@ final class AppState: ObservableObject {
     }
 
     var recordingState: RecordingState {
-        if !hasScreenPermission { return .noPermission }
+        if !hasScreenPermission || needsRelaunch { return .noPermission }
         if !settings.recordingEnabled || manuallyPaused { return .paused(until: nil) }
         if let until = pausedUntil, until > Date() { return .paused(until: until) }
         if monitor.screenLocked { return .suspended("screen locked") }
@@ -265,6 +267,9 @@ final class AppState: ObservableObject {
     func refreshPermissions() {
         hasScreenPermission = ScreenshotService.hasScreenCapturePermission
         hasAccessibility = ActiveWindowResolver.accessibilityTrusted
+        if hasScreenPermission && !needsRelaunch {
+            Task { needsRelaunch = await ScreenshotService.needsRelaunchForScreenCapture() }
+        }
         if let until = pausedUntil, until <= Date() { pausedUntil = nil }
         launchAtLogin = SMAppService.mainApp.status == .enabled
     }
@@ -272,6 +277,15 @@ final class AppState: ObservableObject {
     func requestScreenPermission() {
         ScreenshotService.requestScreenCapturePermission()
         refreshPermissions()
+    }
+
+    /// Starts a fresh instance and quits this one (permission grants apply to new processes).
+    func relaunch() {
+        let config = NSWorkspace.OpenConfiguration()
+        config.createsNewApplicationInstance = true
+        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: config) { _, _ in
+            DispatchQueue.main.async { NSApp.terminate(nil) }
+        }
     }
 
     func requestAccessibility() {

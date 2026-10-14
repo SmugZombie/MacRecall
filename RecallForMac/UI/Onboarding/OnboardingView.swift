@@ -24,9 +24,8 @@ struct OnboardingView: View {
                  detail: "Required. Recall captures only the focused window every \(Int(state.settings.captureInterval)) seconds — never the whole screen.",
                  granted: state.hasScreenPermission,
                  action: ("Grant Access…", { state.requestScreenPermission(); openPrivacyPane("Privacy_ScreenCapture") }))
-            if !state.hasScreenPermission {
-                Text("After enabling Recall in System Settings, macOS may ask you to quit and reopen the app.")
-                    .font(.caption).foregroundStyle(.secondary).padding(.leading, 34)
+            if !state.hasScreenPermission || state.needsRelaunch || !state.hasAccessibility {
+                permissionHelp
             }
 
             step(title: "Accessibility",
@@ -80,6 +79,21 @@ struct OnboardingView: View {
         let result = await state.diagnoseAI()
         aiOK = result.ok
         aiMessage = result.message
+    }
+
+    @ViewBuilder private var permissionHelp: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if state.needsRelaunch {
+                Text("Screen Recording is granted, but macOS only applies it after Recall restarts.")
+            } else {
+                Text("Already switched on in System Settings but still shown as missing? macOS ties permissions to the app's code signature, so an entry from an earlier build doesn't cover this one. Select Recall in the list, remove it with −, then grant access again.")
+            }
+            Button("Relaunch Recall") { state.relaunch() }
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(.leading, 34)
     }
 
     private func step(title: String, detail: String, granted: Bool, action: (String, () -> Void)) -> some View {

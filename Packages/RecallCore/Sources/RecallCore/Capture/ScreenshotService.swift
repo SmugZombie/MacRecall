@@ -6,7 +6,39 @@ import ScreenCaptureKit
 public struct ScreenshotService: Sendable {
     public init() {}
 
-    public static var hasScreenCapturePermission: Bool { CGPreflightScreenCaptureAccess() }
+    /// `CGPreflightScreenCaptureAccess()` is evaluated once per process, so a grant made while the app
+    /// is running isn't reflected until relaunch. Window titles of *other* processes are only visible
+    /// with Screen Recording access, which gives a live answer without ever triggering a prompt.
+    public static var hasScreenCapturePermission: Bool {
+        CGPreflightScreenCaptureAccess() || canReadForeignWindowTitles()
+    }
+
+    static func canReadForeignWindowTitles() -> Bool {
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        guard let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+            return false
+        }
+        return windows.contains { info in
+            guard let pid = info[kCGWindowOwnerPID as String] as? pid_t, pid != ownPID,
+                  let owner = info[kCGWindowOwnerName as String] as? String,
+                  // The Dock and WindowServer expose titles regardless of permission.
+                  owner != "Dock", owner != "Window Server",
+                  let name = info[kCGWindowName as String] as? String else { return false }
+            return !name.isEmpty
+        }
+    }
+
+    /// True when Screen Recording appears granted but ScreenCaptureKit in this process still refuses,
+    /// which happens until the app is relaunched after granting.
+    public static func needsRelaunchForScreenCapture() async -> Bool {
+        guard hasScreenCapturePermission, !CGPreflightScreenCaptureAccess() else { return false }
+        do {
+            _ = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
+            return false
+        } catch {
+            return true
+        }
+    }
 
     @discardableResult
     public static func requestScreenCapturePermission() -> Bool { CGRequestScreenCaptureAccess() }
