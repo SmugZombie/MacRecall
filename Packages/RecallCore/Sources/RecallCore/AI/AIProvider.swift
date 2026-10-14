@@ -155,13 +155,24 @@ struct AIHTTP: Sendable {
         let response: URLResponse
         do {
             (data, response) = try await session.data(for: request)
-        } catch let error as URLError where error.code == .timedOut {
-            throw AIProviderError.http(504, "request timed out")
         } catch {
-            throw AIProviderError.unreachable(error.localizedDescription)
+            throw Self.mapTransportError(error)
         }
         guard let http = response as? HTTPURLResponse else { throw AIProviderError.invalidResponse("not HTTP") }
         return (data, http)
+    }
+
+    /// A cancelled request is not a sign the server is down; keep it distinguishable from outages.
+    static func mapTransportError(_ error: Error) -> Error {
+        if error is CancellationError { return error }
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .cancelled: return CancellationError()
+            case .timedOut: return AIProviderError.http(504, "request timed out")
+            default: break
+            }
+        }
+        return AIProviderError.unreachable(error.localizedDescription)
     }
 
     static func json(_ object: Any) throws -> Data {

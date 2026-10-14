@@ -156,7 +156,7 @@ final class AppState: ObservableObject {
                 if s.recordingEnabled { await coordinator?.start() } else { await coordinator?.stop() }
             }
             if old.aiProcessingEnabled != s.aiProcessingEnabled { await queue?.setAIPaused(!s.aiProcessingEnabled) }
-            if old.maxConcurrentRequests != s.maxConcurrentRequests { await queue?.start() }
+            if old.maxConcurrentRequests != s.maxConcurrentRequests { await queue?.setConcurrency(s.maxConcurrentRequests) }
             if old.providerConfiguration != s.providerConfiguration || old.providerModels != s.providerModels
                 || old.acknowledgedRemoteTargets != s.acknowledgedRemoteTargets {
                 await queue?.checkHealth()

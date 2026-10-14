@@ -1,4 +1,34 @@
+import CoreGraphics
 import Foundation
+
+/// The redact-before-store step. Fails closed: if text can't be recognized, the caller must not
+/// store the image, because unrecognized text can't be checked for secrets.
+public enum RedactionGate {
+    public struct Prepared {
+        public var image: CGImage
+        public var ocrText: String
+        public var ocrConfidence: Double?
+        public var redacted: Bool
+    }
+
+    public struct Unavailable: Error, LocalizedError {
+        public let underlying: String
+        public var errorDescription: String? { "Text recognition failed, so the screenshot couldn't be checked for sensitive content: \(underlying)" }
+    }
+
+    public static func prepare(_ image: CGImage, rules: SensitiveContentRules,
+                               recognize: (CGImage) async throws -> OCRResult) async throws -> Prepared {
+        let result: OCRResult
+        do {
+            result = try await recognize(image)
+        } catch {
+            throw Unavailable(underlying: error.localizedDescription)
+        }
+        let sensitive = result.lines.filter { rules.matches($0.text) }
+        let image = sensitive.isEmpty ? image : ImageProcessing.redact(image, normalizedRects: sensitive.map(\.boundingBox))
+        return Prepared(image: image, ocrText: rules.redact(result.text), ocrConfidence: result.meanConfidence, redacted: !sensitive.isEmpty)
+    }
+}
 
 /// User-configurable patterns for text that should be redacted before storage or transmission.
 ///

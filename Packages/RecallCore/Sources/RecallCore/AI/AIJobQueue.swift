@@ -20,6 +20,11 @@ public actor AIJobQueue {
     private let log = Logger(subsystem: "RecallForMac", category: "jobs")
 
     private var workers: [Task<Void, Never>] = []
+    /// Workers exit after their current job once their generation is superseded, so reconfiguring
+    /// never cancels in-flight requests.
+    private var workerGeneration = 0
+    /// Jobs this process is working on right now; any other `running` row is orphaned.
+    private var inFlight: Set<Int64> = []
     private var healthTask: Task<Void, Never>?
     private var status = QueueStatus()
     private var aiPaused = false
@@ -39,29 +44,53 @@ public actor AIJobQueue {
 
     public func setOnStatus(_ handler: (@Sendable (QueueStatus) -> Void)?) { onStatus = handler }
 
+    /// Starts processing. Call once at launch: it also recovers jobs a previous process left running.
     public func start() {
-        stop()
+        guard healthTask == nil else { return }
         if let n = try? store.recoverInterruptedJobs(), n > 0 { log.info("Recovered \(n) interrupted jobs") }
-        let s = settings()
-        aiPaused = !s.aiProcessingEnabled
-        // Local work (OCR, project rules): two workers. AI provider work: bounded by the user's concurrency limit.
-        for _ in 0..<2 { workers.append(Task { [weak self] in await self?.workerLoop(ai: false) }) }
-        for _ in 0..<s.maxConcurrentRequests { workers.append(Task { [weak self] in await self?.workerLoop(ai: true) }) }
+        aiPaused = !settings().aiProcessingEnabled
+        spawnWorkers(aiConcurrency: settings().maxConcurrentRequests)
         healthTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.checkHealth()
+                await self?.requeueOrphans()
                 let reachable = await self?.status.providerReachable ?? false
                 try? await Task.sleep(for: .seconds(reachable ? 60 : 20))
             }
         }
     }
 
+    /// Changes the number of AI workers. Current workers finish their job and retire; nothing is cancelled.
+    public func setConcurrency(_ aiConcurrency: Int) {
+        guard healthTask != nil else { return }
+        spawnWorkers(aiConcurrency: aiConcurrency)
+    }
+
+    private func spawnWorkers(aiConcurrency: Int) {
+        workerGeneration += 1
+        let generation = workerGeneration
+        workers.removeAll()
+        // Local work (OCR, project rules): two workers. AI provider work: bounded by the user's concurrency limit.
+        for _ in 0..<2 { workers.append(Task { [weak self] in await self?.workerLoop(ai: false, generation: generation) }) }
+        for _ in 0..<max(1, aiConcurrency) { workers.append(Task { [weak self] in await self?.workerLoop(ai: true, generation: generation) }) }
+        wake()
+    }
+
+    /// Shutdown only. In-flight jobs are interrupted and returned to the queue.
     public func stop() {
+        workerGeneration += 1
         workers.forEach { $0.cancel() }
         workers.removeAll()
         healthTask?.cancel()
         healthTask = nil
         wake()
+    }
+
+    private func requeueOrphans() {
+        if let n = try? store.requeueOrphanedJobs(excluding: inFlight), n > 0 {
+            log.info("Requeued \(n) orphaned jobs")
+            publish()
+        }
     }
 
     public func beginInteractive() { interactiveHolds += 1 }
@@ -117,15 +146,18 @@ public actor AIJobQueue {
         return types
     }
 
-    private func workerLoop(ai: Bool) async {
-        while !Task.isCancelled {
+    private func workerLoop(ai: Bool, generation: Int) async {
+        while !Task.isCancelled && generation == workerGeneration {
             let types: Set<JobType> = ai ? allowedAITypes() : [.ocr, .projectAssociation]
             let jobs = (try? store.claimJobs(types: types, limit: 1)) ?? []
             guard let job = jobs.first else {
                 await idle(seconds: ai ? 15 : 5)
                 continue
             }
+            // Registered before any suspension point so the orphan sweep never requeues a live job.
+            inFlight.insert(job.id)
             await run(job)
+            inFlight.remove(job.id)
         }
     }
 
@@ -138,22 +170,59 @@ public actor AIJobQueue {
         }
     }
 
+    enum Disposition: Equatable {
+        /// Work was interrupted (shutdown, cancellation): back to the queue, no attempt spent.
+        case requeue
+        /// The provider is down or rejecting credentials: back to the queue, stop claiming AI work.
+        case outage
+        case fail(retryable: Bool)
+    }
+
+    static func disposition(for error: Error, cancelled: Bool) -> Disposition {
+        if cancelled || error is CancellationError { return .requeue }
+        if let error = error as? AIProviderError {
+            return error.isOutage ? .outage : .fail(retryable: error.isTransient)
+        }
+        return .fail(retryable: true)
+    }
+
     private func run(_ job: JobRecord) async {
         publish()
         do {
             try await processor.process(job)
-            try? store.completeJob(id: job.id)
-        } catch let error as AIProviderError where error.isOutage {
-            // Server down: put the job back without spending an attempt and stop claiming AI work.
-            status.providerReachable = false
-            try? store.deferJob(id: job.id, until: Date().addingTimeInterval(30))
-        } catch let error as AIProviderError {
-            status.lastError = error.localizedDescription
-            _ = try? store.failJob(id: job.id, error: error.localizedDescription, retryable: error.isTransient)
+            await record("complete job \(job.id)") { try self.store.completeJob(id: job.id) }
         } catch {
-            status.lastError = error.localizedDescription
-            _ = try? store.failJob(id: job.id, error: error.localizedDescription, retryable: true)
+            switch Self.disposition(for: error, cancelled: Task.isCancelled) {
+            case .requeue:
+                await record("requeue job \(job.id)") { try self.store.deferJob(id: job.id, until: Date()) }
+            case .outage:
+                status.providerReachable = false
+                status.lastError = error.localizedDescription
+                await record("defer job \(job.id)") { try self.store.deferJob(id: job.id, until: Date().addingTimeInterval(30)) }
+            case .fail(let retryable):
+                status.lastError = error.localizedDescription
+                await record("fail job \(job.id)") {
+                    _ = try self.store.failJob(id: job.id, error: error.localizedDescription, retryable: retryable)
+                }
+            }
         }
         publish()
+    }
+
+    /// Writes job bookkeeping, retrying briefly (e.g. SQLITE_BUSY). If it still fails, the row stays
+    /// `running` and the orphan sweep returns it to the queue once this worker lets go of it.
+    private func record(_ what: String, _ write: () throws -> Void) async {
+        for attempt in 1...3 {
+            do {
+                try write()
+                return
+            } catch {
+                if attempt == 3 {
+                    log.error("Couldn't \(what, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(200 * attempt))
+            }
+        }
     }
 }

@@ -53,11 +53,13 @@ public enum SkipReason: String, Sendable {
     case noFocusedWindow = "no_focused_window"
     case windowNotShareable = "window_not_shareable"
     case duplicate
+    /// Redaction is on but text recognition failed, so the frame was discarded unstored.
+    case redactionFailed = "redaction_failed"
 
     /// Reasons worth persisting as a `capture_skipped` event (others are routine and would flood the log).
     public var isNoteworthy: Bool {
         switch self {
-        case .noFocusedWindow, .windowNotShareable, .secureInput, .excludedApplication, .noPermission: return true
+        case .noFocusedWindow, .windowNotShareable, .secureInput, .excludedApplication, .noPermission, .redactionFailed: return true
         default: return false
         }
     }

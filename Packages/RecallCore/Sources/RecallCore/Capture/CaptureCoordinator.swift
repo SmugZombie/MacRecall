@@ -185,6 +185,10 @@ public actor CaptureCoordinator {
             lastCaptureID = record.id
             lastCaptureAt = now
             return .captured(record.id)
+        } catch let error as RedactionGate.Unavailable {
+            log.error("Discarded frame: \(error.localizedDescription, privacy: .public)")
+            recordSkip(.redactionFailed, detail: "ocr failed", bundle: window.bundleIdentifier)
+            return .skipped(.redactionFailed)
         } catch {
             log.error("Persisting capture failed: \(error.localizedDescription, privacy: .public)")
             return .failed(error.localizedDescription)
@@ -199,17 +203,14 @@ public actor CaptureCoordinator {
         var redacted = false
 
         if settings.redactionEnabled {
-            // Redaction must precede storage, so OCR runs inline here.
-            let rules = settings.sensitiveRules
-            if let result = try? await ocr.recognize(image) {
-                let sensitive = result.lines.filter { rules.matches($0.text) }
-                if !sensitive.isEmpty {
-                    finalImage = ImageProcessing.redact(image, normalizedRects: sensitive.map(\.boundingBox))
-                    redacted = true
-                }
-                ocrText = rules.redact(result.text)
-                ocrConfidence = result.meanConfidence
-            }
+            // Redaction must precede storage, so OCR runs inline here. If it fails this throws,
+            // and the frame is discarded rather than stored unredacted.
+            let ocr = self.ocr
+            let prepared = try await RedactionGate.prepare(image, rules: settings.sensitiveRules) { try await ocr.recognize($0) }
+            finalImage = prepared.image
+            ocrText = prepared.ocrText
+            ocrConfidence = prepared.ocrConfidence
+            redacted = prepared.redacted
         }
 
         let (imageRel, thumbRel) = Self.relativePaths(for: date, format: settings.imageFormat)

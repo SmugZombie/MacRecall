@@ -158,9 +158,16 @@ public final class SQLiteDatabase: @unchecked Sendable {
         return result
     }
 
+    private var savepointDepth = 0
+
     /// Runs `body` inside an immediate transaction; rolls back if it throws.
+    ///
+    /// Nested calls (a repository method that uses a transaction, called from another one) become
+    /// savepoints: an inner failure rolls back only the inner work, and nothing is durable until
+    /// the outermost transaction commits.
     public func transaction<T>(_ body: () throws -> T) throws -> T {
         lock.lock(); defer { lock.unlock() }
+        guard sqlite3_get_autocommit(handle) != 0 else { return try savepoint(body) }
         try execute("BEGIN IMMEDIATE")
         do {
             let value = try body()
@@ -168,6 +175,22 @@ public final class SQLiteDatabase: @unchecked Sendable {
             return value
         } catch {
             try? execute("ROLLBACK")
+            throw error
+        }
+    }
+
+    private func savepoint<T>(_ body: () throws -> T) throws -> T {
+        savepointDepth += 1
+        defer { savepointDepth -= 1 }
+        let name = "sp_\(savepointDepth)"
+        try execute("SAVEPOINT \(name)")
+        do {
+            let value = try body()
+            try execute("RELEASE \(name)")
+            return value
+        } catch {
+            // ROLLBACK TO undoes the savepoint's work but leaves it open; RELEASE closes it.
+            try? execute("ROLLBACK TO \(name); RELEASE \(name)")
             throw error
         }
     }

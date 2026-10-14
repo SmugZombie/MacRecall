@@ -82,7 +82,17 @@ extension RecallStore {
 
     /// Jobs left `running` by a previous process are returned to the queue.
     public func recoverInterruptedJobs() throws -> Int {
-        try db.run("UPDATE ai_jobs SET status = 'pending' WHERE status = 'running'")
+        try requeueOrphanedJobs(excluding: [])
+    }
+
+    /// Returns `running` jobs that no live worker holds to `pending` (e.g. after a bookkeeping write
+    /// failed). `inFlight` are the IDs this process is actually working on.
+    @discardableResult
+    public func requeueOrphanedJobs(excluding inFlight: Set<Int64>) throws -> Int {
+        guard !inFlight.isEmpty else { return try db.run("UPDATE ai_jobs SET status = 'pending' WHERE status = 'running'") }
+        let ids = inFlight.sorted()
+        return try db.run("UPDATE ai_jobs SET status = 'pending' WHERE status = 'running' AND id NOT IN (\(Array(repeating: "?", count: ids.count).joined(separator: ",")))",
+                          ids as [SQLBindable])
     }
 
     public func retryFailedJobs(types: Set<JobType>? = nil) throws {
