@@ -1,0 +1,1038 @@
+# Project: Recall for macOS
+## Native Local-First AI Activity History and Search
+
+### 1. Project Overview
+
+Build a native macOS application that provides functionality comparable to Microsoft Windows Recall, but with an emphasis on privacy, local AI, work-session reconstruction, and developer productivity.
+
+The application will periodically capture the currently active application window, extract visible text, index the activity, and use local Ollama models to generate contextual descriptions and summaries.
+
+Users should be able to browse their historical activity through a visual timeline and search their history using natural language.
+
+**Core objective:** Allow users to determine what they were working on, when they worked on it, what applications were involved, and what information was visible during that activity.
+
+The application must remain fully functional without internet access.
+
+### 2. Mandatory Technology Stack
+
+| Layer | Technology |
+|---|---|
+| Language | Swift |
+| User interface | SwiftUI |
+| Target OS | macOS 14 Sonoma or newer |
+| Screen capture | ScreenCaptureKit |
+| App monitoring | NSWorkspace |
+| Window metadata | macOS Accessibility APIs |
+| OCR | Apple Vision |
+| Local database | SQLite with FTS5 |
+| Semantic search | Local vector index |
+| AI inference | Ollama REST API |
+| Images | HEIC/JPEG |
+| Background execution | Native macOS application lifecycle |
+| Preferences | UserDefaults / AppStorage |
+| Secure credentials | Keychain |
+| Build system | Xcode project |
+
+Avoid Electron, Node.js backend services, Python runtime dependencies, Docker, or externally hosted services.
+
+The application should be completely self-contained apart from the configured Ollama service.
+
+Use native Swift concurrency and structured concurrency wherever practical.
+
+### 3. Core Product Requirements
+
+#### 3.1 Active Window Capture
+
+The application shall capture only the currently active/focused application window.
+
+Requirements:
+
+- Default capture interval: 30 seconds.
+- Configurable interval: 10–300 seconds.
+- Optional capture whenever the focused window changes.
+- Use `NSWorkspace.shared.frontmostApplication` for foreground application detection.
+- Resolve the focused window using macOS Accessibility APIs where available.
+- Match the focused window to an `SCWindow` and capture it using ScreenCaptureKit.
+- Use `SCScreenshotManager` where available for individual screenshots.
+- Capture the application window independently of the surrounding desktop.
+- Support applications across multiple monitors and macOS Spaces.
+- Exclude the application's own interface by default.
+- Do not capture the mouse cursor unless explicitly enabled.
+- Preserve the original aspect ratio.
+- Resize excessively large screenshots to configurable maximum dimensions.
+- Record window and application identifiers, title, timestamp, and capture dimensions.
+- Never substitute a full-screen screenshot when active-window detection fails.
+- If no valid window is available, record a skipped capture reason.
+
+Avoid repeatedly saving visually identical frames.
+
+Implement a perceptual hashing or image similarity mechanism to detect duplicate and nearly identical screenshots.
+
+When the content is unchanged, update the activity duration without creating a redundant screenshot.
+
+**Important:** An application can own several windows. Do not assume the largest window or the first returned window is focused. Match actual focused-window identity wherever technically feasible.
+
+Window detection must tolerate permission limitations and applications that do not expose useful Accessibility metadata.
+
+#### 3.2 Activity Monitoring
+
+Record the following metadata:
+
+- Timestamp in UTC.
+- Local timezone identifier.
+- Application name.
+- Application bundle identifier.
+- Process identifier.
+- Window title.
+- Window identifier where available.
+- Active-window change events.
+- Idle and resumed activity.
+- Screen lock and unlock events.
+- Sleep and wake events.
+- Capture status.
+- Associated screenshot.
+- OCR processing state.
+- AI processing state.
+
+The system should distinguish between:
+
+1. An application becoming active.
+2. A different window within the same application becoming active.
+3. Window content changing.
+4. A user becoming idle.
+5. A user resuming activity.
+
+Use a configurable idle timeout, defaulting to five minutes.
+
+Suspend capture when:
+
+- The screen is locked.
+- The system is asleep.
+- The user has manually paused recording.
+- The active application is excluded.
+- The application detects an unsupported secure capture context.
+
+Support a configurable option to disable capture while the machine is on battery.
+
+#### 3.3 Native OCR
+
+Use Apple's Vision framework for extracting text from screenshots.
+
+Requirements:
+
+- Process screenshots asynchronously.
+- Do not block screenshot capture while OCR executes.
+- Store recognized text in SQLite.
+- Record OCR confidence when available.
+- Support full-text searching.
+- Preserve screenshot-to-text relationships.
+- Do not require Ollama for OCR.
+- Prefer accurate recognition for source code, terminal output, URLs, and filenames.
+- Allow OCR processing to be retried if interrupted.
+
+Index meaningful technical strings, including:
+
+- File paths.
+- Hostnames.
+- Repository names.
+- Error messages.
+- Source code symbols.
+- Command-line output.
+- Application titles.
+- Visible URLs.
+
+OCR must run locally.
+
+#### 3.4 Ollama Integration
+
+Implement an `OllamaService` responsible for all interactions with Ollama.
+
+Configuration:
+
+- Default endpoint: `http://127.0.0.1:11434`
+- Support user-configurable endpoints.
+- Support local and private-network Ollama deployments.
+- Allow users to select separate models for vision, summarization, and embeddings.
+- Discover available models using the Ollama API.
+- Provide connection and model capability checks.
+- Allow configuration of request timeouts and concurrent jobs.
+- Validate model availability before submitting work.
+- Never automatically download large models without user approval.
+
+Expected interfaces:
+
+- `GET /api/tags`
+- `POST /api/chat`
+- `POST /api/embed`
+
+Vision analysis should receive:
+
+- Screenshot or resized image.
+- Application name.
+- Window title.
+- Timestamp.
+- Relevant OCR text.
+- Limited context from preceding activity events.
+
+Require structured responses using a supported JSON schema.
+
+Example:
+
+```json
+{
+  "activity": "Backend development",
+  "description": "Reviewing Docker container networking",
+  "project": "TrueSOC",
+  "applications": ["Terminal"],
+  "topics": ["Docker", "PostgreSQL", "networking"],
+  "confidence": 0.93
+}
+```
+
+Models must describe observable evidence and avoid fabricating user actions or outcomes.
+
+For example, if a screenshot shows a terminal displaying a database connection error, the model may state that the user was investigating a database connectivity problem. It must not claim the issue was fixed without supporting evidence.
+
+**Ollama must be optional.** Screenshot capture, OCR, timeline navigation, and keyword search must continue working when Ollama is unavailable.
+
+#### 3.5 Asynchronous AI Processing
+
+AI processing must never block capture.
+
+Create a durable background processing queue.
+
+Job types:
+
+- OCR extraction.
+- Screenshot visual analysis.
+- Text embedding generation.
+- Activity classification.
+- Session summary generation.
+- Daily summary generation.
+- Project association.
+
+Each job should store:
+
+- Job identifier.
+- Job type.
+- Related screenshot/session.
+- Status.
+- Priority.
+- Attempts.
+- Last error.
+- Creation timestamp.
+- Completion timestamp.
+
+Queue behavior:
+
+- Retry temporary failures with bounded exponential backoff.
+- Avoid infinite retry loops.
+- Recover unfinished jobs after application restart.
+- Skip duplicate jobs.
+- Limit concurrent Ollama requests.
+- Support pausing AI processing independently of screenshot capture.
+- Give recent or user-requested analysis priority over historical backfills.
+- Persist processing status so the UI can show progress.
+
+When Ollama is unavailable, jobs should remain queued without affecting the user interface.
+
+#### 3.6 Activity Sessions
+
+Individual screenshots should be grouped into meaningful activity sessions.
+
+A session represents a period where the user appears to be working on a related task.
+
+Use a combination of:
+
+- Time proximity.
+- Application identities.
+- Window titles.
+- OCR similarity.
+- AI-generated descriptions.
+- Embedding similarity.
+- Identified project names.
+- Idle interruptions.
+
+For example:
+
+10:00 AM — VS Code, API source file  
+10:05 AM — Terminal, Docker Compose  
+10:09 AM — Browser, PostgreSQL documentation  
+10:12 AM — Terminal, database troubleshooting
+
+These events may represent one session:
+
+**10:00–10:15 AM: Backend development and PostgreSQL troubleshooting**
+
+Session grouping must not rely exclusively on an LLM.
+
+Create a deterministic baseline grouping algorithm that works without Ollama, then enhance the classifications when AI results are available.
+
+Support manual session merging, splitting, renaming, and project reassignment.
+
+Preserve individual screenshot timestamps even when multiple captures are combined into a session.
+
+#### 3.7 Timeline Interface
+
+Create a native SwiftUI timeline.
+
+Primary layout:
+
+- Sidebar with navigation.
+- Date selection.
+- Activity filters.
+- Chronological activity list.
+- Screenshot previews.
+- Expanded activity details.
+
+Navigation sections:
+
+- Today.
+- Yesterday.
+- This Week.
+- Calendar.
+- Search.
+- Projects.
+- Settings.
+
+Each activity should display:
+
+- Start/end time.
+- Application icon(s).
+- Activity title.
+- Short summary.
+- Screenshot thumbnail.
+- Project association, when available.
+- AI processing state when relevant.
+
+Selecting an activity opens a detailed view containing:
+
+- Larger screenshot.
+- Exact timestamp.
+- Window title.
+- OCR text.
+- AI description.
+- Related screenshots.
+- Previous and next activities.
+- Session summary.
+
+Provide a timeline scrubber allowing users to navigate captured screenshots chronologically.
+
+Images and database records must load lazily to support extensive history.
+
+#### 3.8 Search
+
+Provide two complementary search systems.
+
+**Keyword Search**
+
+Use SQLite FTS5 to index:
+
+- OCR text.
+- Application names.
+- Window titles.
+- AI descriptions.
+- Session summaries.
+- Project names.
+
+Support exact text matching and filtering.
+
+**Semantic Search**
+
+Use embeddings generated by the configured Ollama embedding model.
+
+Example queries:
+
+- "When was I troubleshooting Docker networking?"
+- "Find the terminal where I saw a PostgreSQL error."
+- "What was I working on last Tuesday?"
+- "Show the last time I used that AWS deployment command."
+- "What did I work on before lunch yesterday?"
+- "Find screenshots of the application configuration page."
+
+Use hybrid retrieval:
+
+1. Resolve date/time constraints.
+2. Apply metadata filters.
+3. Execute keyword search.
+4. Execute vector similarity search.
+5. Merge and rank candidates.
+6. Return relevant screenshots and sessions.
+
+Natural-language queries should be interpreted into structured search filters where appropriate.
+
+Every AI-generated answer must include references to actual screenshot or session records.
+
+Do not allow the language model to invent unseen historical events.
+
+If evidence is insufficient, state that explicitly.
+
+#### 3.9 Daily Summaries
+
+Generate daily work summaries using completed activity sessions.
+
+Summaries should include:
+
+- Major activities.
+- Projects worked on.
+- Applications used.
+- Approximate time spent.
+- Significant observed technical issues.
+- Activity transitions.
+- Unclassified activity.
+
+Only calculate time from observed activity intervals.
+
+Distinguish observed activity time from estimated time.
+
+Allow users to regenerate summaries after project corrections or additional AI processing.
+
+Support copying summaries as Markdown.
+
+#### 3.10 Project Awareness
+
+Allow the system to associate activity with projects.
+
+A project may have identifying characteristics such as:
+
+- Repository paths.
+- Application titles.
+- Browser domains.
+- Distinctive keywords.
+- File paths.
+- User-defined aliases.
+
+For example:
+
+Project: TrueSOC  
+Keywords: truesoc, postgres, minio, elasticmq  
+Applications: VS Code, Terminal, Browser
+
+The system should learn candidate associations over time, but ambiguous assignments must remain unclassified or be presented for correction.
+
+Provide project detail screens with:
+
+- Activity timeline.
+- Total observed active time.
+- Daily/weekly summaries.
+- Related screenshots.
+- Search scoped to that project.
+
+Users must be able to create, rename, merge, and delete projects.
+
+### 4. Privacy and Security
+
+Privacy is a primary architectural requirement, not an optional enhancement.
+
+Default behavior:
+
+- No telemetry.
+- No cloud synchronization.
+- No remote account requirement.
+- No automatic uploads.
+- No third-party analytics.
+- No public HTTP server.
+- No unrestricted network access.
+
+Provide:
+
+- Application exclusion list.
+- Temporary pause option.
+- Keyboard shortcut to pause/resume.
+- Visible menu bar recording status.
+- Capture retention policy.
+- One-click history deletion.
+- Delete history by date range.
+- Clear AI-generated metadata.
+- Clear search indexes.
+- Storage usage information.
+- Optional encrypted data storage.
+
+**Sensitive information requirements**
+
+Screenshots may contain passwords, API keys, tokens, private messages, and customer information.
+
+Implement application exclusion before capture.
+
+Avoid capturing known secure windows when detectable.
+
+Provide user-configurable sensitive-content rules.
+
+Redaction must happen before screenshots are permanently stored or transmitted to a remote Ollama endpoint when redaction is enabled.
+
+Do not assume OCR-based redaction can catch every secret.
+
+Explicitly warn users before enabling a non-loopback Ollama endpoint, since screenshots and extracted text may leave the local Mac.
+
+Do not log screenshot contents, OCR text, AI prompts, secrets, or image data.
+
+For the initial version, optimize for local development and direct distribution rather than Mac App Store compatibility.
+
+### 5. Local Database Architecture
+
+Use SQLite with WAL mode and foreign keys.
+
+Implement schema migrations from the beginning.
+
+Suggested tables:
+
+**applications**
+- id
+- bundle_identifier
+- name
+- first_seen
+- last_seen
+
+**windows**
+- id
+- application_id
+- system_window_id
+- title
+- first_seen
+- last_seen
+
+**captures**
+- id
+- application_id
+- window_id
+- captured_at
+- image_path
+- thumbnail_path
+- image_hash
+- width
+- height
+- ocr_text
+- ocr_status
+- ai_status
+- activity_session_id
+- metadata_json
+
+**activity_events**
+- id
+- timestamp
+- event_type
+- application_id
+- window_id
+- metadata_json
+
+**sessions**
+- id
+- started_at
+- ended_at
+- title
+- summary
+- project_id
+- classification_confidence
+
+**projects**
+- id
+- name
+- description
+- identification_rules_json
+- created_at
+
+**ai_jobs**
+- id
+- job_type
+- entity_type
+- entity_id
+- status
+- priority
+- attempts
+- last_error
+- created_at
+- completed_at
+
+**embeddings**
+- id
+- entity_type
+- entity_id
+- model
+- model_version
+- dimensions
+- vector_data
+- created_at
+
+**daily_summaries**
+- id
+- local_date
+- timezone
+- summary
+- generated_at
+
+**settings**
+- key
+- value
+
+Use FTS5 virtual tables with appropriate synchronization triggers.
+
+Use parameterized queries and transactions for batch operations.
+
+Never load all screenshots or embeddings into memory simply to display a page of timeline results.
+
+Consider a SQLite vector extension if it can be bundled reliably. Otherwise, implement a modular vector-search abstraction that supports an efficient index later.
+
+Store images as files rather than database BLOBs.
+
+Recommended storage location:
+
+`~/Library/Application Support/RecallForMac/`
+
+Suggested directories:
+
+```text
+RecallForMac/
+├── recall.sqlite
+├── screenshots/
+│   └── YYYY/
+│       └── MM/
+│           └── DD/
+├── thumbnails/
+├── logs/
+└── exports/
+```
+
+Use atomic writes for screenshots and ensure records never point to partially written files.
+
+Store dates internally in UTC, while presenting timeline dates in the user's local timezone.
+
+### 6. Native Application Structure
+
+Use a modular architecture with Swift protocols, actors, and services.
+
+Suggested project layout:
+
+```text
+RecallForMac/
+├── App/
+│   ├── RecallApp.swift
+│   ├── AppState.swift
+│   └── AppLifecycle.swift
+├── Capture/
+│   ├── CaptureCoordinator.swift
+│   ├── ActiveWindowResolver.swift
+│   ├── ScreenshotService.swift
+│   ├── CaptureScheduler.swift
+│   └── ImageDeduplication.swift
+├── Monitoring/
+│   ├── ApplicationMonitor.swift
+│   ├── WindowMonitor.swift
+│   ├── IdleMonitor.swift
+│   └── SystemStateMonitor.swift
+├── OCR/
+│   └── VisionOCRService.swift
+├── AI/
+│   ├── OllamaService.swift
+│   ├── ModelDiscovery.swift
+│   ├── VisionAnalyzer.swift
+│   ├── EmbeddingService.swift
+│   ├── SessionSummarizer.swift
+│   └── AIJobQueue.swift
+├── Database/
+│   ├── DatabaseManager.swift
+│   ├── Migrations/
+│   └── Repositories/
+├── Search/
+│   ├── KeywordSearch.swift
+│   ├── SemanticSearch.swift
+│   └── HybridSearch.swift
+├── Activity/
+│   ├── ActivitySessionManager.swift
+│   ├── ProjectClassifier.swift
+│   └── DailySummaryService.swift
+├── Privacy/
+│   ├── CapturePolicy.swift
+│   ├── ExclusionManager.swift
+│   └── RetentionManager.swift
+├── UI/
+│   ├── MenuBar/
+│   ├── Timeline/
+│   ├── Search/
+│   ├── Projects/
+│   ├── Summaries/
+│   ├── Settings/
+│   └── Onboarding/
+├── Models/
+├── Utilities/
+└── Tests/
+```
+
+This is a proposed layout, not a requirement to create empty files before implementing actual functionality.
+
+Favor maintainable, testable services over large monolithic classes.
+
+### 7. Menu Bar Experience
+
+The application must support convenient background operation.
+
+Menu bar features:
+
+- Recording indicator.
+- Start recording.
+- Pause recording.
+- Resume recording.
+- Open timeline.
+- Search history.
+- View current AI processing queue.
+- Open settings.
+- Quit application.
+
+Display a clear distinction between:
+
+- Recording active.
+- Recording paused.
+- Screen capture permission unavailable.
+- AI unavailable.
+- AI processing backlog.
+
+Enable launch at login using the supported macOS service-management APIs.
+
+The user should not need to keep the main application window open.
+
+For the initial release, a menu-bar-hosted application with a persistent coordinator is acceptable. A separate login helper or agent should only be introduced if lifecycle testing demonstrates a need.
+
+### 8. Settings
+
+Implement a native settings interface containing:
+
+**Capture**
+- Capture enabled.
+- Screenshot interval.
+- Capture on window change.
+- Maximum image dimensions.
+- Screenshot compression quality.
+- Deduplication sensitivity.
+- Idle timeout.
+- Battery behavior.
+
+**Privacy**
+- Excluded applications.
+- Screenshot retention days.
+- Automatic cleanup.
+- Sensitive content rules.
+- Delete all history.
+
+**AI**
+- Ollama endpoint.
+- Connection test.
+- Available models.
+- Vision model.
+- Summary model.
+- Embedding model.
+- Maximum concurrent requests.
+- Background processing enabled.
+- Reprocess pending screenshots.
+
+**Storage**
+- Total disk usage.
+- Screenshot count.
+- Database size.
+- Oldest stored screenshot.
+- Cleanup action.
+
+**General**
+- Start at login.
+- Menu bar behavior.
+- Notifications.
+- Keyboard shortcut.
+- Local timezone display.
+
+### 9. Development Milestones
+
+Implement this application in phases. Each phase must produce working, testable functionality before proceeding.
+
+#### Phase 1 — Native App Foundation
+
+Build the SwiftUI application and menu bar interface.
+
+Deliverables:
+- Compiling Xcode project.
+- Main history window.
+- Menu bar item.
+- Settings infrastructure.
+- Recording state.
+- Permission onboarding.
+- Launch-at-login option.
+
+Acceptance:
+- App launches without errors.
+- Main window opens and closes.
+- Menu bar remains operational.
+- Settings persist across restarts.
+- Permission states are displayed accurately.
+
+#### Phase 2 — Active Window Capture
+
+Implement foreground application tracking and focused-window resolution.
+
+Deliverables:
+- Active application monitor.
+- Focused-window resolver.
+- ScreenCaptureKit capture.
+- Capture scheduler.
+- Screenshot files.
+- Capture metadata records.
+- Application exclusions.
+- Basic duplicate detection.
+
+Acceptance:
+- Captures the actual active window.
+- Does not capture unrelated desktop content.
+- Handles changing applications.
+- Works with an external monitor.
+- Respects exclusion settings.
+- Stops when recording is paused.
+- Does not silently capture the full desktop when window resolution fails.
+
+#### Phase 3 — Timeline and Persistence
+
+Implement SQLite storage and functional history navigation.
+
+Deliverables:
+- Database migrations.
+- Capture repository.
+- Thumbnail generation.
+- Timeline view.
+- Date navigation.
+- Screenshot detail view.
+- Basic activity metadata filters.
+- Retention cleanup.
+
+Acceptance:
+- Screenshots survive restarts.
+- Users can browse prior captures.
+- Selecting a capture displays its original image.
+- History remains responsive with thousands of entries.
+- Cleanup removes both database records and referenced images.
+
+#### Phase 4 — OCR and Keyword Search
+
+Integrate Apple Vision.
+
+Deliverables:
+- OCR worker.
+- OCR persistence.
+- FTS5 indexes.
+- Search interface.
+- Search result highlighting.
+- Background job recovery.
+
+Acceptance:
+- Captured terminal text becomes searchable.
+- Users can search filenames and error messages.
+- OCR runs without blocking screen capture.
+- Search results link to correct screenshots.
+- OCR failures can be retried.
+
+#### Phase 5 — Ollama AI
+
+Implement model discovery, inference, and analysis.
+
+Deliverables:
+- Configurable Ollama client.
+- Model selection.
+- Connection testing.
+- Vision analysis.
+- Structured result validation.
+- Embedding generation.
+- Durable inference queue.
+
+Acceptance:
+- AI describes supported screenshot content.
+- Screenshots are not sent to any endpoint other than the configured Ollama server.
+- Ollama outages do not stop recording.
+- Queued jobs recover after restart.
+- Invalid AI responses do not corrupt the database.
+
+#### Phase 6 — Sessions and Summaries
+
+Implement activity reconstruction.
+
+Deliverables:
+- Session grouping.
+- AI-generated session titles.
+- Session summaries.
+- Daily activity summaries.
+- Manual session corrections.
+- Basic project association.
+
+Acceptance:
+- Related screenshots form coherent sessions.
+- Idle periods are excluded from active-time estimates.
+- Summaries are grounded in captured history.
+- Users can rename or reassign sessions.
+- Sessions remain available when AI is offline.
+
+#### Phase 7 — Natural Language Search
+
+Implement semantic and hybrid search.
+
+Deliverables:
+- Embedding index.
+- Semantic retrieval.
+- Keyword/vector hybrid ranking.
+- Date constraint interpretation.
+- Natural-language question answering.
+- Screenshot citations in search results.
+
+Acceptance:
+- Users can find activities without knowing exact terminology.
+- Historical answers link to real records.
+- Time-filtered searches respect requested dates.
+- No unsupported historical claims are presented as facts.
+
+#### Phase 8 — Optimization and Release
+
+Deliverables:
+- Performance profiling.
+- Storage optimization.
+- Privacy hardening.
+- Database integrity recovery.
+- Migration testing.
+- Signed/notarized distribution preparation.
+- User documentation.
+
+Acceptance:
+- Capture remains responsive during AI inference.
+- Recording survives ordinary application lifecycle events.
+- Large histories do not exhaust memory.
+- Screen lock and sleep suppress captures.
+- Retention and deletion operate reliably.
+- Sensitive data does not appear in diagnostic logs.
+
+### 10. Testing Requirements
+
+Use Swift Testing or XCTest.
+
+At minimum, implement automated tests for:
+
+- Active-window matching logic.
+- Application exclusions.
+- Capture scheduling.
+- Deduplication.
+- SQLite migrations.
+- Screenshot persistence.
+- OCR job recovery.
+- AI job retries.
+- Session grouping.
+- Timezone conversion.
+- Search ranking.
+- Retention cleanup.
+- Failure handling.
+
+Use mocked ScreenCaptureKit and Ollama interfaces where appropriate.
+
+Create local fixture screenshots for OCR and AI contract tests.
+
+Test offline operation independently from Ollama availability.
+
+Manual integration tests must cover:
+
+- Multi-monitor usage.
+- Changing Spaces.
+- Switching between windows in the same application.
+- Minimized and hidden windows.
+- Full-screen applications.
+- Locked screen.
+- Sleep/wake.
+- Permission denial and revocation.
+- Application restart.
+- Database recovery.
+- Ollama unavailable.
+- Ollama endpoint changed.
+- Remote Ollama with sensitive-content safeguards.
+
+### 11. Performance Requirements
+
+Targets, to be validated on representative Apple Silicon Macs:
+
+- Minimal resource use when idle.
+- No continuous high-frame-rate recording.
+- Capture operations must not freeze the UI.
+- Image processing must occur asynchronously.
+- Screenshot thumbnails must be cached.
+- Database operations must support pagination.
+- AI inference must be rate-limited.
+- Capture backlog must be bounded.
+- User actions should remain responsive during AI processing.
+- Capture should continue when Ollama is unavailable.
+
+Avoid retaining full-resolution images in memory longer than necessary.
+
+Prefer one-shot screen capture over a continuous video stream for the periodic screenshot use case.
+
+### 12. Future Enhancements
+
+Do not implement these until the core application is stable:
+
+- Browser extension for accurate URL/tab metadata.
+- VS Code extension for project/repository awareness.
+- Terminal shell integration for command metadata.
+- Calendar correlation.
+- Git commit correlation.
+- Project-specific timesheets.
+- Export to Markdown, JSON, or CSV.
+- User-corrected project classification training signals.
+- Activity heatmaps.
+- Timeline comparison between days.
+- Encrypted multi-device synchronization.
+- Local MCP server exposing searchable history to approved AI assistants.
+
+These integrations should use explicit user authorization and avoid broad collection of sensitive data.
+
+### 13. Instructions for Claude Code
+
+You are the lead macOS engineer implementing this application.
+
+Follow these rules:
+
+1. Build a real, compiling application rather than a static UI prototype.
+2. Use native Swift and SwiftUI.
+3. Implement one development phase at a time.
+4. Favor working functionality over speculative abstractions.
+5. Verify Apple API availability against the macOS deployment target.
+6. Do not invent API methods or assume APIs are available.
+7. Compile and test after meaningful implementation changes.
+8. When running on a machine without Xcode, identify the exact verification steps that remain.
+9. Add error handling and structured logging.
+10. Never log screenshot image content, secrets, or raw OCR.
+11. Maintain database migrations.
+12. Write tests for nontrivial logic.
+13. Do not silently fall back to full-desktop capture.
+14. Treat permission failures as normal recoverable states.
+15. Keep Ollama optional and independently configurable.
+16. Never transmit data to third-party services.
+17. Document design decisions in `docs/ARCHITECTURE.md`.
+18. Maintain implementation progress in `docs/PROGRESS.md`.
+19. Keep `README.md` updated with build and usage instructions.
+20. Avoid adding dependencies when native Apple frameworks already provide the necessary capability.
+
+### 14. Initial Claude Task
+
+Begin implementation with Phase 1 and the smallest useful portion of Phase 2.
+
+First:
+
+- Inspect the existing repository, if any.
+- Establish the Xcode project.
+- Implement the main SwiftUI application.
+- Create the menu bar interface.
+- Implement persisted settings.
+- Implement permission onboarding for Screen Recording and Accessibility.
+- Implement frontmost-application monitoring.
+- Implement an active-window resolver.
+- Implement a manual **Capture Active Window** action using ScreenCaptureKit.
+- Save captures to the application's support directory.
+- Display the latest captured screenshot in the main application window.
+
+Do not start AI, embeddings, or advanced timeline work until the manual active-window capture path is functional.
+
+If a clean focused-window-to-ScreenCaptureKit mapping proves unreliable for certain applications, document the limitation and implement an explicit skipped-capture state rather than silently capturing other windows.
+
+**First success milestone:**
+
+On a Mac running the application, the user can switch to VS Code, Terminal, Safari, or another supported application, trigger a capture, and then view a screenshot containing only that application's focused window.
+
+Once this is working, proceed to automatic capture scheduling, persistence, and the searchable timeline.
+
+Build this as a maintainable application intended for real daily use, not a demonstration.

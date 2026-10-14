@@ -1,0 +1,191 @@
+import AppKit
+import RecallCore
+import SwiftUI
+
+struct CaptureDetailView: View {
+    let captureID: Int64
+    var onSelect: (Int64) -> Void
+
+    @EnvironmentObject private var state: AppState
+    @State private var capture: CaptureRecord?
+    @State private var session: SessionRecord?
+    @State private var related: [CaptureRecord] = []
+    @State private var previous: CaptureRecord?
+    @State private var next: CaptureRecord?
+
+    var body: some View {
+        ScrollView {
+            if let capture {
+                VStack(alignment: .leading, spacing: 14) {
+                    navigation(capture)
+                    StoredImage(relativePath: capture.imagePath)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .onTapGesture(count: 2) { openInPreview(capture) }
+                        .help("Double-click to open in Preview")
+                    metadata(capture)
+                    aiSection(capture)
+                    if let session { sessionSection(session) }
+                    ocrSection(capture)
+                    if related.count > 1 { relatedSection }
+                }
+                .padding(16)
+            } else {
+                ProgressView().padding(40)
+            }
+        }
+        .task(id: "\(captureID)-\(state.revision)") { load() }
+    }
+
+    private func load() {
+        guard let store = state.store, let c = try? store.capture(id: captureID) else { capture = nil; return }
+        capture = c
+        session = c.sessionID.flatMap { try? store.session(id: $0) }
+        previous = try? store.previousCapture(before: c.capturedAt)
+        next = try? store.nextCapture(after: c.capturedAt)
+        if let sid = c.sessionID {
+            let all = (try? store.captures(inSession: sid)) ?? []
+            if let i = all.firstIndex(where: { $0.id == c.id }) {
+                related = Array(all[max(0, i - 6)..<min(all.count, i + 7)])
+            }
+        } else {
+            related = []
+        }
+    }
+
+    private func navigation(_ c: CaptureRecord) -> some View {
+        HStack {
+            Button { if let p = previous { onSelect(p.id) } } label: { Label("Previous", systemImage: "chevron.left") }
+                .disabled(previous == nil).keyboardShortcut(.leftArrow, modifiers: [])
+            Spacer()
+            Text(c.capturedAt.formatted(date: .abbreviated, time: .standard))
+                .font(.headline.monospacedDigit())
+                .help("UTC: \(c.capturedAt.formatted(.iso8601))  ·  Time zone: \(c.timezone)")
+            Spacer()
+            Button { if let n = next { onSelect(n.id) } } label: { Label("Next", systemImage: "chevron.right").labelStyle(.titleAndIcon) }
+                .disabled(next == nil).keyboardShortcut(.rightArrow, modifiers: [])
+        }
+    }
+
+    private func metadata(_ c: CaptureRecord) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                AppIcon(bundleIdentifier: c.bundleIdentifier, size: 20)
+                Text(c.applicationName).font(.headline)
+                ProcessingBadge(capture: c)
+                Spacer()
+                Menu {
+                    Button("Open in Preview") { openInPreview(c) }
+                    Button("Reveal in Finder") { reveal(c) }
+                    Button("Copy OCR Text") { copy(c.ocrText) }.disabled(c.ocrText.isEmpty)
+                    Divider()
+                    Button("Analyze Now") { state.prioritize(captureID: c.id) }
+                    Button("Retry OCR") {
+                        try? state.store?.enqueueJob(.ocr, entityType: "capture", entityID: c.id, priority: 100)
+                        state.refreshQueue()
+                    }
+                } label: { Image(systemName: "ellipsis.circle") }
+                .menuStyle(.borderlessButton).fixedSize()
+            }
+            if !c.windowTitle.isEmpty {
+                Text(c.windowTitle).font(.callout).textSelection(.enabled)
+            }
+            let seen = c.lastSeenAt.timeIntervalSince(c.capturedAt)
+            Text("\(c.width)×\(c.height)" + (seen > 1 ? " · unchanged for \(formatDuration(seen))" : ""))
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder private func aiSection(_ c: CaptureRecord) -> some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 6) {
+                if let json = c.aiJSON?.data(using: .utf8), let a = try? JSONDecoder().decode(ActivityAnalysis.self, from: json) {
+                    HStack {
+                        Text(a.activity).font(.headline)
+                        if let p = a.project { StatusPill(text: p, color: .accentColor) }
+                        Spacer()
+                        Text("confidence \(Int(a.confidence * 100))%").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Text(a.description).textSelection(.enabled)
+                    if !a.topics.isEmpty {
+                        Text(a.topics.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
+                    }
+                } else {
+                    switch c.aiStatus {
+                    case .pending: Text("Waiting for AI analysis.").foregroundStyle(.secondary)
+                    case .running: Text("Analyzing…").foregroundStyle(.secondary)
+                    case .failed: Text("AI analysis failed. Use “Analyze Now” to retry.").foregroundStyle(.secondary)
+                    case .skipped: Text("No AI model configured.").foregroundStyle(.secondary)
+                    case .done: Text("No description.").foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } label: { Label("AI description", systemImage: "sparkles") }
+    }
+
+    private func sessionSection(_ s: SessionRecord) -> some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(s.title).font(.headline)
+                Text("\(timeRange(s.startedAt, s.endedAt)) · \(formatDuration(s.activeSeconds)) active · \(s.captureCount) screenshots")
+                    .font(.caption).foregroundStyle(.secondary)
+                if !s.summary.isEmpty { Text(s.summary).textSelection(.enabled) }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } label: { Label("Session", systemImage: "rectangle.stack") }
+    }
+
+    private func ocrSection(_ c: CaptureRecord) -> some View {
+        GroupBox {
+            Group {
+                if c.ocrText.isEmpty {
+                    Text(c.ocrStatus == .done ? "No text recognized." : "Text recognition \(c.ocrStatus.rawValue).")
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text(c.ocrText)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } label: {
+            HStack {
+                Label("Recognized text", systemImage: "text.viewfinder")
+                if let conf = c.ocrConfidence { Text("\(Int(conf * 100))%").font(.caption).foregroundStyle(.secondary) }
+            }
+        }
+    }
+
+    private var relatedSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Related screenshots").font(.headline)
+            ScrollView(.horizontal) {
+                LazyHStack {
+                    ForEach(related) { r in
+                        StoredImage(relativePath: r.thumbnailPath, maxPixel: 240)
+                            .frame(width: 110, height: 70)
+                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                            .overlay(RoundedRectangle(cornerRadius: 4).stroke(r.id == captureID ? Color.accentColor : .clear, lineWidth: 2))
+                            .onTapGesture { onSelect(r.id) }
+                    }
+                }
+            }
+            .frame(height: 76)
+        }
+    }
+
+    private func openInPreview(_ c: CaptureRecord) {
+        guard let store = state.store else { return }
+        NSWorkspace.shared.open(store.paths.absolute(c.imagePath))
+    }
+
+    private func reveal(_ c: CaptureRecord) {
+        guard let store = state.store else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([store.paths.absolute(c.imagePath)])
+    }
+
+    private func copy(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+}
