@@ -116,8 +116,10 @@ func addCapture(_ store: RecallStore, app: String = "Terminal", bundle: String =
         try store.setSessionProject(id: sid, projectID: a, source: "user")
         try store.setSessionProject(id: sid, projectID: b, source: "auto")
         #expect(try store.session(id: sid)?.projectID == a)
+        // A project correction protects the project only: AI may still title and summarize the session.
         try store.applyAISessionResult(id: sid, title: "AI title", summary: "s", confidence: 0.5)
-        #expect(try store.session(id: sid)?.title == "x")
+        let session = try #require(try store.session(id: sid))
+        #expect(session.title == "AI title" && session.projectID == a && !session.userLocked)
     }
 
     @Test func migrationsAreIdempotent() throws {

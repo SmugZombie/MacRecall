@@ -21,6 +21,7 @@ extension RecallStore {
             title: row.string("title") ?? "",
             titleSource: row.string("title_source") ?? "deterministic",
             summary: row.string("summary") ?? "",
+            summarySource: row.string("summary_source") ?? "none",
             projectID: row.int("project_id"),
             projectName: row.string("project_name"),
             projectSource: row.string("project_source") ?? "none",
@@ -62,6 +63,33 @@ extension RecallStore {
         try db.queryOne("\(Self.sessionSelect) ORDER BY s.ended_at DESC LIMIT 1").map(Self.session(from:))
     }
 
+    /// The session whose time span contains `date`, if any.
+    public func sessionContaining(_ date: Date) throws -> SessionRecord? {
+        try db.queryOne("\(Self.sessionSelect) WHERE s.started_at <= ? AND s.ended_at >= ? ORDER BY s.started_at DESC LIMIT 1", [date, date])
+            .map(Self.session(from:))
+    }
+
+    /// The most recent session that ended at or before `date`.
+    public func sessionEnding(atOrBefore date: Date) throws -> SessionRecord? {
+        try db.queryOne("\(Self.sessionSelect) WHERE s.ended_at <= ? ORDER BY s.ended_at DESC LIMIT 1", [date]).map(Self.session(from:))
+    }
+
+    /// Start and end times of sessions overlapping a range (used as grouping boundaries).
+    public func sessionBoundaries(from start: Date, to end: Date, excluding: Int64? = nil) throws -> [Date] {
+        try db.query("SELECT id, started_at, ended_at FROM sessions WHERE ended_at >= ? AND started_at <= ?", [start, end])
+            .filter { $0.int("id") != excluding }
+            .flatMap { [$0.date("started_at"), $0.date("ended_at")].compactMap { $0 } }
+    }
+
+    /// Adds captures to an existing session and recomputes its bounds and active time.
+    public func attach(captureIDs: [Int64], toSession id: Int64) throws {
+        guard !captureIDs.isEmpty else { return }
+        try db.transaction {
+            try assign(captureIDs: captureIDs, toSession: id)
+            try recomputeBounds(sessionID: id)
+        }
+    }
+
     public func createSession(start: Date, end: Date, title: String, activeSeconds: Double, captureIDs: [Int64]) throws -> Int64 {
         try db.transaction {
             let id = try db.insert("INSERT INTO sessions (started_at, ended_at, title, active_seconds) VALUES (?, ?, ?, ?)",
@@ -75,7 +103,7 @@ extension RecallStore {
         try db.transaction {
             try db.run("UPDATE sessions SET ended_at = MAX(ended_at, ?), active_seconds = ? WHERE id = ?", [end, activeSeconds, id])
             if let title {
-                try db.run("UPDATE sessions SET title = ? WHERE id = ? AND title_source = 'deterministic' AND user_locked = 0", [title, id])
+                try db.run("UPDATE sessions SET title = ? WHERE id = ? AND title_source = 'deterministic'", [title, id])
             }
             try assign(captureIDs: captureIDs, toSession: id)
         }
@@ -87,33 +115,40 @@ extension RecallStore {
         }
     }
 
-    /// Updates title/summary from AI unless the user has edited the session.
+    /// Applies an AI title/summary, field by field: anything the user wrote is left alone.
     public func applyAISessionResult(id: Int64, title: String, summary: String, confidence: Double?) throws {
         try db.run("""
             UPDATE sessions SET
-                title = CASE WHEN user_locked = 0 THEN ? ELSE title END,
-                title_source = CASE WHEN user_locked = 0 THEN 'ai' ELSE title_source END,
-                summary = ?, classification_confidence = ?
+                title = CASE WHEN title_source = 'user' THEN title ELSE ? END,
+                title_source = CASE WHEN title_source = 'user' THEN 'user' ELSE 'ai' END,
+                summary = CASE WHEN summary_source = 'user' THEN summary ELSE ? END,
+                summary_source = CASE WHEN summary_source = 'user' THEN 'user' ELSE 'ai' END,
+                classification_confidence = ?
             WHERE id = ?
             """, [title, summary, confidence, id])
     }
 
     public func renameSession(id: Int64, title: String) throws {
-        try db.run("UPDATE sessions SET title = ?, title_source = 'user', user_locked = 1 WHERE id = ?", [title, id])
+        try db.run("UPDATE sessions SET title = ?, title_source = 'user' WHERE id = ?", [title, id])
     }
 
+    /// A user-written summary; an empty one hands the summary back to AI.
+    public func setSessionSummary(id: Int64, summary: String) throws {
+        let trimmed = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        try db.run("UPDATE sessions SET summary = ?, summary_source = ? WHERE id = ?", [trimmed, trimmed.isEmpty ? "none" : "user", id])
+    }
+
+    /// Sets the session's project. Capture-level associations are independent classifier signals and
+    /// are not overwritten; project filters and search consult the session's project as well.
     public func setSessionProject(id: Int64, projectID: Int64?, source: String, confidence: Double? = nil) throws {
-        try db.transaction {
-            if source == "user" {
-                try db.run("UPDATE sessions SET project_id = ?, project_source = 'user', user_locked = 1 WHERE id = ?", [projectID, id])
-            } else {
-                // Never override a user's correction with an automatic association.
-                try db.run("""
-                    UPDATE sessions SET project_id = ?, project_source = ?, classification_confidence = COALESCE(?, classification_confidence)
-                    WHERE id = ? AND project_source != 'user'
-                    """, [projectID, source, confidence, id])
-            }
-            try db.run("UPDATE captures SET project_id = (SELECT project_id FROM sessions WHERE id = ?) WHERE activity_session_id = ?", [id, id])
+        if source == "user" {
+            try db.run("UPDATE sessions SET project_id = ?, project_source = 'user' WHERE id = ?", [projectID, id])
+        } else {
+            // Never override a user's correction with an automatic association.
+            try db.run("""
+                UPDATE sessions SET project_id = ?, project_source = ?, classification_confidence = COALESCE(?, classification_confidence)
+                WHERE id = ? AND project_source != 'user'
+                """, [projectID, source, confidence, id])
         }
     }
 

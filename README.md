@@ -2,7 +2,7 @@
 
 A native, local-first activity history for macOS. Recall captures the **focused window** at a regular interval, extracts text with Apple Vision, groups captures into work sessions, and makes everything searchable — by keyword out of the box, and with AI descriptions, summaries and semantic search when an AI provider is configured: [Ollama](https://ollama.com) or [LM Studio](https://lmstudio.ai) on your Mac, or OpenAI / Amazon Bedrock in the cloud.
 
-Everything is stored under `~/Library/Application Support/RecallForMac/`. There is no telemetry, account or cloud sync; the only network traffic is to the AI provider you configure, and remote providers stay paused until you explicitly approve them.
+Everything is stored under `~/Library/Application Support/RecallForMac/`, with history in a `Data.noindex` folder so Spotlight never indexes your screenshots or the text inside them. There is no telemetry, account or cloud sync; the only network traffic is to the AI provider you configure, and remote providers stay paused until you explicitly approve them.
 
 ## Build & run
 

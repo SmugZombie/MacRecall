@@ -5,6 +5,7 @@ import Foundation
 enum Migrations {
     static let all: [(version: Int, sql: String)] = [
         (1, v1),
+        (2, v2),
     ]
 
     static func migrate(_ db: SQLiteDatabase) throws {
@@ -17,6 +18,40 @@ enum Migrations {
             }
         }
     }
+
+    /// Field-level provenance for session summaries; `user_locked` now means only "grouping curated
+    /// by the user" (merge/split), not "renamed" or "project assigned".
+    static let v2 = """
+    ALTER TABLE sessions ADD COLUMN summary_source TEXT NOT NULL DEFAULT 'none';
+    UPDATE sessions SET summary_source = 'ai' WHERE summary != '';
+
+    -- A capture's indexed project is its own association, else its session's. Session project
+    -- changes are no longer copied onto captures, so the index follows them instead.
+    DROP TRIGGER captures_fts_insert;
+    DROP TRIGGER captures_fts_update;
+    CREATE TRIGGER captures_fts_insert AFTER INSERT ON captures BEGIN
+        INSERT INTO capture_fts(rowid, app_name, window_title, ocr_text, ai_description, project) VALUES (
+            new.id,
+            (SELECT name FROM applications WHERE id = new.application_id),
+            COALESCE((SELECT title FROM windows WHERE id = new.window_id), ''),
+            new.ocr_text, new.ai_description,
+            COALESCE((SELECT name FROM projects WHERE id = COALESCE(new.project_id, (SELECT project_id FROM sessions WHERE id = new.activity_session_id))), '')
+        );
+    END;
+    CREATE TRIGGER captures_fts_update AFTER UPDATE OF ocr_text, ai_description, window_id, project_id, activity_session_id ON captures BEGIN
+        DELETE FROM capture_fts WHERE rowid = old.id;
+        INSERT INTO capture_fts(rowid, app_name, window_title, ocr_text, ai_description, project) VALUES (
+            new.id,
+            (SELECT name FROM applications WHERE id = new.application_id),
+            COALESCE((SELECT title FROM windows WHERE id = new.window_id), ''),
+            new.ocr_text, new.ai_description,
+            COALESCE((SELECT name FROM projects WHERE id = COALESCE(new.project_id, (SELECT project_id FROM sessions WHERE id = new.activity_session_id))), '')
+        );
+    END;
+    CREATE TRIGGER sessions_project_reindexes_captures AFTER UPDATE OF project_id ON sessions BEGIN
+        UPDATE captures SET project_id = project_id WHERE activity_session_id = new.id;
+    END;
+    """
 
     static let v1 = """
     CREATE TABLE applications (

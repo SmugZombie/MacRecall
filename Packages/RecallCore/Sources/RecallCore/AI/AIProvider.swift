@@ -100,6 +100,7 @@ public enum AIProviderError: Error, LocalizedError, Sendable {
     case http(Int, String)
     case invalidResponse(String)
     case unsupported(String)
+    case redirectRefused(String)
 
     public var errorDescription: String? {
         switch self {
@@ -112,6 +113,7 @@ public enum AIProviderError: Error, LocalizedError, Sendable {
         case .http(let code, let m): return "The AI provider returned HTTP \(code): \(m)"
         case .invalidResponse(let m): return "Invalid response from model: \(m)"
         case .unsupported(let m): return m
+        case .redirectRefused(let target): return "The AI server tried to redirect the request to \(target). Recall only sends data to the configured server; update the endpoint if it moved."
         }
     }
 
@@ -129,7 +131,7 @@ public enum AIProviderError: Error, LocalizedError, Sendable {
     /// Jobs wait instead of spending retry attempts; fixing settings resumes them.
     public var isOutage: Bool {
         switch self {
-        case .unreachable, .unauthorized, .missingCredentials, .invalidEndpoint: return true
+        case .unreachable, .unauthorized, .missingCredentials, .invalidEndpoint, .redirectRefused: return true
         default: return false
         }
     }
@@ -146,7 +148,7 @@ struct AIHTTP: Sendable {
         config.waitsForConnectivity = false
         // Traffic must go directly to the configured server.
         if configuration == nil { config.connectionProxyDictionary = [:] }
-        session = URLSession(configuration: config)
+        session = URLSession(configuration: config, delegate: RedirectGuard(), delegateQueue: nil)
     }
 
     /// Performs the request and maps transport failures. Returns body and status for any HTTP response.
@@ -159,6 +161,10 @@ struct AIHTTP: Sendable {
             throw Self.mapTransportError(error)
         }
         guard let http = response as? HTTPURLResponse else { throw AIProviderError.invalidResponse("not HTTP") }
+        if (300..<400).contains(http.statusCode) {
+            // RedirectGuard declined to follow it.
+            throw AIProviderError.redirectRefused(http.value(forHTTPHeaderField: "Location") ?? "another location")
+        }
         return (data, http)
     }
 
@@ -191,6 +197,25 @@ struct AIHTTP: Sendable {
         if let m = obj["message"] as? String { return m.clipped(300) }
         if let m = obj["Message"] as? String { return m.clipped(300) }
         return ""
+    }
+}
+
+/// Approval is per destination, so a redirect must not carry a screenshot to another server.
+/// Only same-host, same-port redirects are followed, and never from https down to http.
+final class RedirectGuard: NSObject, URLSessionTaskDelegate, Sendable {
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(Self.allows(from: task.originalRequest?.url, to: request.url) ? request : nil)
+    }
+
+    static func allows(from original: URL?, to target: URL?) -> Bool {
+        guard let original, let target,
+              let fromHost = original.host?.lowercased(), let toHost = target.host?.lowercased(), fromHost == toHost else { return false }
+        func port(_ url: URL) -> Int? { url.port ?? (url.scheme == "https" ? 443 : url.scheme == "http" ? 80 : nil) }
+        if original.scheme == "https" && target.scheme != "https" { return false }
+        // An http→https upgrade on the default ports is the same server; otherwise ports must match.
+        if original.scheme == "http" && target.scheme == "https" && original.port == nil && target.port == nil { return true }
+        return port(original) == port(target)
     }
 }
 

@@ -237,3 +237,166 @@ import Testing
         _ = SystemStateMonitor.liveState()
     }
 }
+
+@Suite struct RedactionPrecisionTests {
+    let rules = SensitiveContentRules()
+
+    @Test func cardRuleNeedsIssuerShape() {
+        #expect(rules.matches("Visa 4111 1111 1111 1111"))
+        #expect(rules.matches("amex 378282246310005"))
+        // Luhn-valid but no card issuer has this prefix/length: an order or account number.
+        #expect(SensitiveContentRules.luhnValid("1234567812345670".compactMap(\.wholeNumberValue)))
+        #expect(!rules.matches("Order 1234567812345670 shipped"))
+        // Part of a longer digit run is not a card.
+        #expect(!rules.matches("trace id 9994111111111111111111"))
+        #expect(!rules.matches("2026-10-14 15:53:12 build 1234567"))
+    }
+
+    @Test func onlyTheMatchedSpanIsBlackedOut() async throws {
+        let line = "Card: 4111 1111 1111 1111 exp 12/27"
+        let box = CGRect(x: 0, y: 0.4, width: 1, height: 0.1)
+        let ocr = OCRResult(lines: [OCRLine(text: line, confidence: 1, boundingBox: box)])
+        let image = ImageProcessing.draw(width: 400, height: 100) { ctx in
+            ctx.setFillColor(CGColor(gray: 1, alpha: 1)); ctx.fill(CGRect(x: 0, y: 0, width: 400, height: 100))
+        }!
+        let prepared = try await RedactionGate.prepare(image, rules: rules) { _ in ocr }
+        #expect(prepared.redacted)
+        #expect(prepared.ocrText == "Card: [REDACTED] exp 12/27")
+        // The span estimate covers the number, not the whole line.
+        let range = line.range(of: "4111 1111 1111 1111")!
+        let rect = OCRLine(text: line, confidence: 1, boundingBox: box).box(for: range)
+        #expect(rect.minX > 0.1 && rect.maxX < 0.8)
+        // Pixels at the line's start and end stay white.
+        let grid = ImageFingerprint.grayscale(prepared.image, width: 400, height: 100)!
+        #expect(grid[55 * 400 + 2] > 200 && grid[55 * 400 + 397] > 200)
+    }
+
+    @Test func visionLocatorIsPreferred() {
+        let line = OCRLine(text: "abc secret", confidence: 1, boundingBox: CGRect(x: 0, y: 0, width: 1, height: 1)) { _ in
+            CGRect(x: 0.5, y: 0, width: 0.2, height: 1)
+        }
+        #expect(line.box(for: line.text.range(of: "secret")!) == CGRect(x: 0.5, y: 0, width: 0.2, height: 1))
+    }
+}
+
+@Suite struct ProvenanceTests {
+    @Test func aiRespectsUserFieldsIndependently() throws {
+        let store = try makeStore()
+        let c = try addCapture(store, at: Date())
+        let sid = try store.createSession(start: Date(), end: Date(), title: "auto", activeSeconds: 0, captureIDs: [c.id])
+
+        try store.renameSession(id: sid, title: "My title")
+        try store.applyAISessionResult(id: sid, title: "AI title", summary: "AI summary", confidence: 0.7)
+        var s = try #require(try store.session(id: sid))
+        #expect(s.title == "My title" && s.summary == "AI summary" && s.summarySource == "ai")
+        #expect(!s.userLocked)  // renaming doesn't freeze grouping
+
+        try store.setSessionSummary(id: sid, summary: "My notes")
+        try store.applyAISessionResult(id: sid, title: "AI 2", summary: "AI summary 2", confidence: 0.7)
+        s = try #require(try store.session(id: sid))
+        #expect(s.summary == "My notes" && s.summarySource == "user")
+
+        try store.clearAIMetadata()
+        #expect(try store.session(id: sid)?.summary == "My notes")
+
+        try store.setSessionSummary(id: sid, summary: "  ")  // hand back to AI
+        try store.applyAISessionResult(id: sid, title: "AI 3", summary: "AI summary 3", confidence: 0.7)
+        #expect(try store.session(id: sid)?.summary == "AI summary 3")
+    }
+
+    @Test func projectAssignmentDoesNotStampCaptures() throws {
+        let store = try makeStore()
+        let a = try store.createProject(name: "Alpha")
+        let b = try store.createProject(name: "Beta")
+        let c1 = try addCapture(store, at: Date(), ocr: "kubernetes rollout")
+        let c2 = try addCapture(store, at: Date().addingTimeInterval(30), ocr: "kubernetes logs")
+        try store.setCaptureProject(captureID: c1.id, projectID: b)  // classifier's own signal
+        let sid = try store.createSession(start: Date(), end: Date(), title: "x", activeSeconds: 0, captureIDs: [c1.id, c2.id])
+
+        try store.setSessionProject(id: sid, projectID: a, source: "user")
+        #expect(try store.capture(id: c1.id)?.projectID == b)
+        #expect(try store.capture(id: c2.id)?.projectID == nil)
+        // Scoped search still finds the session's captures through the session's project.
+        let hits = try KeywordSearch(store: store).searchCaptures("kubernetes", scope: SearchScope(projectID: a))
+        #expect(Set(hits.map(\.entityID)) == [c1.id, c2.id])
+    }
+}
+
+@Suite struct RegroupingTests {
+    let t0 = Date().addingTimeInterval(-3 * 3600)
+
+    func overlaps(_ store: RecallStore) throws -> Int {
+        Int(try store.db.scalarInt("""
+            SELECT COUNT(*) FROM sessions a JOIN sessions b ON a.id < b.id
+            WHERE a.started_at < b.ended_at AND b.started_at < a.ended_at
+            """))
+    }
+
+    @Test func holeInLongSessionRejoinsIt() throws {
+        let store = try makeStore()
+        let caps = try (0..<20).map { try addCapture(store, title: "server.ts — truesoc", at: t0.addingTimeInterval(Double($0) * 60), ocr: "truesoc server") }
+        try ActivitySessionManager(store: store).update(now: t0.addingTimeInterval(3600))
+        let sid = try #require(try store.capture(id: caps[0].id)?.sessionID)
+        #expect(try store.sessions(from: .distantPast, to: .distantFuture).count == 1)
+
+        // Punch a hole in the middle (as a partial regroup would) and update again.
+        try store.db.run("UPDATE captures SET activity_session_id = NULL WHERE id = ?", [caps[10].id])
+        try ActivitySessionManager(store: store).update(now: t0.addingTimeInterval(3600))
+        #expect(try store.capture(id: caps[10].id)?.sessionID == sid)
+        #expect(try store.sessions(from: .distantPast, to: .distantFuture).count == 1)
+    }
+
+    @Test func rebuildAroundCuratedSessionCreatesNoOverlaps() throws {
+        let store = try makeStore()
+        // Work, a curated block in the middle, more work; all within the idle gap of each other.
+        let before = try (0..<5).map { try addCapture(store, title: "notes", at: t0.addingTimeInterval(Double($0) * 60), ocr: "notes alpha") }
+        let middle = try (5..<8).map { try addCapture(store, title: "notes", at: t0.addingTimeInterval(Double($0) * 60), ocr: "notes alpha") }
+        let after = try (8..<12).map { try addCapture(store, title: "notes", at: t0.addingTimeInterval(Double($0) * 60), ocr: "notes alpha") }
+        let manager = ActivitySessionManager(store: store)
+        try manager.update(now: t0.addingTimeInterval(3600))
+        let original = try #require(try store.capture(id: middle[0].id)?.sessionID)
+        _ = try store.splitSession(id: original, at: middle[0].capturedAt)            // curated: locks both halves
+        if let tail = try store.capture(id: after[0].id)?.sessionID, tail != original {
+            _ = try store.splitSession(id: tail, at: after[0].capturedAt)
+        }
+        try store.db.run("UPDATE sessions SET user_locked = 0 WHERE id IN (SELECT activity_session_id FROM captures WHERE id IN (?, ?))",
+                         [before[0].id, after[0].id])
+
+        try manager.rebuild(from: t0, to: t0.addingTimeInterval(3600), now: t0.addingTimeInterval(3600))
+        #expect(try overlaps(store) == 0)
+        #expect(try store.db.scalarInt("SELECT COUNT(*) FROM captures WHERE activity_session_id IS NULL") == 0)
+        // The curated middle block is untouched.
+        let middleSessions = Set(try middle.map { try store.capture(id: $0.id)?.sessionID })
+        #expect(middleSessions.count == 1)
+    }
+}
+
+@Suite struct StorageLayoutTests {
+    @Test func legacyLayoutMovesIntoNoIndexFolder() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("recall-legacy-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("screenshots/2026/10/14"), withIntermediateDirectories: true)
+        try Data([1]).write(to: root.appendingPathComponent("screenshots/2026/10/14/a.heic"))
+        do {  // a 1.0.0-era database at the old location
+            let db = try SQLiteDatabase(path: root.appendingPathComponent("recall.sqlite").path)
+            try Migrations.migrate(db)
+            try db.run("INSERT INTO settings (key, value) VALUES ('marker', 'kept')")
+        }
+        let store = try RecallStore(paths: StoragePaths(root: root))
+        #expect(store.paths.database.path.contains("Data.noindex"))
+        #expect(try store.setting("marker") == "kept")
+        #expect(FileManager.default.fileExists(atPath: store.paths.absolute("screenshots/2026/10/14/a.heic").path))
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("recall.sqlite").path))
+        #expect(FileManager.default.fileExists(atPath: store.paths.data.appendingPathComponent(".metadata_never_index").path))
+    }
+}
+
+@Suite struct RedirectTests {
+    @Test func redirectPolicy() {
+        let u = { (s: String) in URL(string: s) }
+        #expect(RedirectGuard.allows(from: u("http://127.0.0.1:1234/v1/models"), to: u("http://127.0.0.1:1234/v1/models/")))
+        #expect(RedirectGuard.allows(from: u("http://gpu.local/v1"), to: u("https://gpu.local/v1")))
+        #expect(!RedirectGuard.allows(from: u("https://api.example.com/v1"), to: u("https://evil.example.net/v1")))
+        #expect(!RedirectGuard.allows(from: u("https://api.example.com/v1"), to: u("http://api.example.com/v1")))
+        #expect(!RedirectGuard.allows(from: u("http://127.0.0.1:1234/v1"), to: u("http://127.0.0.1:9999/v1")))
+    }
+}

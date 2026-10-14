@@ -23,7 +23,7 @@ public struct RetentionManager: Sendable {
             let rows = try store.db.query("SELECT image_path, thumbnail_path FROM captures")
             known = Set(rows.flatMap { [$0.string("image_path") ?? "", $0.string("thumbnail_path") ?? ""] })
         } catch { return }
-        let rootPath = store.paths.root.standardizedFileURL.path
+        let rootPath = store.paths.data.standardizedFileURL.path
         for dir in [store.paths.screenshots, store.paths.thumbnails] {
             guard let enumerator = fm.enumerator(at: dir, includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey]) else { continue }
             for case let url as URL in enumerator {

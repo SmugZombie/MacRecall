@@ -24,9 +24,10 @@ public enum RedactionGate {
         } catch {
             throw Unavailable(underlying: error.localizedDescription)
         }
-        let sensitive = result.lines.filter { rules.matches($0.text) }
-        let image = sensitive.isEmpty ? image : ImageProcessing.redact(image, normalizedRects: sensitive.map(\.boundingBox))
-        return Prepared(image: image, ocrText: rules.redact(result.text), ocrConfidence: result.meanConfidence, redacted: !sensitive.isEmpty)
+        // Black out only the matched spans, not whole lines.
+        let rects = result.lines.flatMap { line in rules.matchRanges(in: line.text).map { line.box(for: $0) } }
+        let image = rects.isEmpty ? image : ImageProcessing.redact(image, normalizedRects: rects)
+        return Prepared(image: image, ocrText: rules.redact(result.text), ocrConfidence: result.meanConfidence, redacted: !rects.isEmpty)
     }
 }
 
@@ -61,7 +62,8 @@ public struct SensitiveContentRules: Codable, Sendable, Equatable {
         Rule(name: "JSON Web Token", pattern: #"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"#),
         Rule(name: "Password assignment", pattern: #"(?i)\b(pass(word|wd)?|secret|api[_-]?key|token)\s*[:=]\s*\S{4,}"#),
         Rule(name: "Connection string credentials", pattern: #"(?i)\b[a-z][a-z0-9+.-]*://[^\s:/@]+:[^\s@]+@"#),
-        Rule(name: "Payment card number", pattern: #"\b(?:\d[ -]?){13,19}\b"#),
+        // Not part of a longer number; validated further by `isLikelyCardNumber`.
+        Rule(name: "Payment card number", pattern: #"(?<![\d-])\d(?:[ -]?\d){12,18}(?![\d])"#),
     ]
 
     private var compiled: [(Rule, NSRegularExpression)] {
@@ -70,33 +72,60 @@ public struct SensitiveContentRules: Codable, Sendable, Equatable {
         }
     }
 
-    public func matches(_ text: String) -> Bool {
-        let range = NSRange(text.startIndex..., in: text)
-        return compiled.contains { rule, regex in
-            guard let match = regex.firstMatch(in: text, range: range) else { return false }
-            if rule.name == "Payment card number" {
-                return Self.luhnValid(String(text[Range(match.range, in: text)!]))
+    public func matches(_ text: String) -> Bool { !matchRanges(in: text).isEmpty }
+
+    /// Ranges of `text` matched by enabled rules, merged where they overlap.
+    public func matchRanges(in text: String) -> [Range<String.Index>] {
+        var ranges: [Range<String.Index>] = []
+        for (rule, regex) in compiled {
+            for match in regex.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+                guard let range = Range(match.range, in: text) else { continue }
+                if rule.name == "Payment card number", !Self.isLikelyCardNumber(String(text[range])) { continue }
+                ranges.append(range)
             }
-            return true
         }
+        ranges.sort { $0.lowerBound < $1.lowerBound }
+        var merged: [Range<String.Index>] = []
+        for r in ranges {
+            if let last = merged.last, r.lowerBound <= last.upperBound {
+                merged[merged.count - 1] = last.lowerBound..<max(last.upperBound, r.upperBound)
+            } else {
+                merged.append(r)
+            }
+        }
+        return merged
     }
 
     /// Replaces matching spans with a placeholder.
     public func redact(_ text: String) -> String {
         var result = text
-        for (rule, regex) in compiled {
-            let matches = regex.matches(in: result, range: NSRange(result.startIndex..., in: result)).reversed()
-            for match in matches {
-                guard let range = Range(match.range, in: result) else { continue }
-                if rule.name == "Payment card number", !Self.luhnValid(String(result[range])) { continue }
-                result.replaceSubrange(range, with: "[REDACTED]")
-            }
+        for range in matchRanges(in: text).reversed() {
+            result.replaceSubrange(range, with: "[REDACTED]")
         }
         return result
     }
 
-    static func luhnValid(_ candidate: String) -> Bool {
+    /// Luhn-valid *and* shaped like a real card (issuer prefix and length), which rejects most
+    /// long numeric IDs, timestamps and phone numbers that happen to pass Luhn.
+    static func isLikelyCardNumber(_ candidate: String) -> Bool {
         let digits = candidate.compactMap(\.wholeNumberValue)
+        guard luhnValid(digits) else { return false }
+        let n = digits.count
+        let s = digits.map(String.init).joined()
+        func prefix(_ length: Int) -> Int { Int(s.prefix(length)) ?? -1 }
+        switch true {
+        case s.hasPrefix("4"): return [13, 16, 19].contains(n)                                        // Visa
+        case (51...55).contains(prefix(2)) || (2221...2720).contains(prefix(4)): return n == 16      // Mastercard
+        case [34, 37].contains(prefix(2)): return n == 15                                            // Amex
+        case s.hasPrefix("6011") || s.hasPrefix("65") || (644...649).contains(prefix(3))
+            || (622126...622925).contains(prefix(6)): return (16...19).contains(n)                   // Discover
+        case (3528...3589).contains(prefix(4)): return (16...19).contains(n)                         // JCB
+        case (300...305).contains(prefix(3)) || [36, 38, 39].contains(prefix(2)): return (14...19).contains(n)  // Diners
+        default: return false
+        }
+    }
+
+    static func luhnValid(_ digits: [Int]) -> Bool {
         guard (13...19).contains(digits.count) else { return false }
         var sum = 0
         for (i, d) in digits.reversed().enumerated() {

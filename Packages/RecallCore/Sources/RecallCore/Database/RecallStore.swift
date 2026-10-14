@@ -1,11 +1,15 @@
 import Foundation
 
 /// On-disk layout under ~/Library/Application Support/RecallForMac/.
+///
+/// History lives in `Data.noindex/`: Spotlight skips folders ending in `.noindex`, and it would
+/// otherwise index the screenshots, including the text it recognizes inside images.
 public struct StoragePaths: Sendable {
     public let root: URL
-    public var database: URL { root.appendingPathComponent("recall.sqlite") }
-    public var screenshots: URL { root.appendingPathComponent("screenshots", isDirectory: true) }
-    public var thumbnails: URL { root.appendingPathComponent("thumbnails", isDirectory: true) }
+    public var data: URL { root.appendingPathComponent("Data.noindex", isDirectory: true) }
+    public var database: URL { data.appendingPathComponent("recall.sqlite") }
+    public var screenshots: URL { data.appendingPathComponent("screenshots", isDirectory: true) }
+    public var thumbnails: URL { data.appendingPathComponent("thumbnails", isDirectory: true) }
     public var logs: URL { root.appendingPathComponent("logs", isDirectory: true) }
     public var exports: URL { root.appendingPathComponent("exports", isDirectory: true) }
 
@@ -17,18 +21,36 @@ public struct StoragePaths: Sendable {
     }
 
     public func createDirectories() throws {
-        for dir in [root, screenshots, thumbnails, logs, exports] {
+        try migrateLegacyLayout()
+        for dir in [root, data, screenshots, thumbnails, logs, exports] {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         }
-        // Keep history out of Time Machine/Spotlight-adjacent indexing by default.
+        // Belt and braces alongside the .noindex name.
+        let marker = data.appendingPathComponent(".metadata_never_index")
+        if !FileManager.default.fileExists(atPath: marker.path) {
+            FileManager.default.createFile(atPath: marker.path, contents: Data())
+        }
+        // Keep history out of Time Machine.
         var values = URLResourceValues()
         values.isExcludedFromBackup = true
         var rootURL = root
         try? rootURL.setResourceValues(values)
     }
 
-    /// Image paths are stored relative to `root` so the library can be moved.
-    public func absolute(_ relative: String) -> URL { root.appendingPathComponent(relative) }
+    /// Version 1.0.0 kept the database and images directly under `root`; move them into `data`.
+    func migrateLegacyLayout() throws {
+        let fm = FileManager.default
+        let legacyDB = root.appendingPathComponent("recall.sqlite")
+        guard fm.fileExists(atPath: legacyDB.path), !fm.fileExists(atPath: database.path) else { return }
+        try fm.createDirectory(at: data, withIntermediateDirectories: true)
+        for name in ["recall.sqlite", "recall.sqlite-wal", "recall.sqlite-shm", "screenshots", "thumbnails"] {
+            let from = root.appendingPathComponent(name)
+            if fm.fileExists(atPath: from.path) { try fm.moveItem(at: from, to: data.appendingPathComponent(name)) }
+        }
+    }
+
+    /// Image paths are stored relative to `data` so the library can be moved.
+    public func absolute(_ relative: String) -> URL { data.appendingPathComponent(relative) }
 }
 
 public struct TimelineFilter: Sendable, Equatable {

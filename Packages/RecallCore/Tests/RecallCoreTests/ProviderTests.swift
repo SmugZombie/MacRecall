@@ -43,6 +43,9 @@ final class MockURLProtocol: URLProtocol, @unchecked Sendable {
         let next: (status: Int, headers: [String: String], body: Data) =
             Self.responses.isEmpty ? (200, [:], Data("{}".utf8)) : Self.responses.removeFirst()
         let response = HTTPURLResponse(url: request.url!, statusCode: next.status, httpVersion: "HTTP/1.1", headerFields: next.headers)!
+        if (300..<400).contains(next.status), let location = next.headers["Location"], let target = URL(string: location) {
+            client?.urlProtocol(self, wasRedirectedTo: URLRequest(url: target), redirectResponse: response)
+        }
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: next.body)
         client?.urlProtocolDidFinishLoading(self)
@@ -256,6 +259,22 @@ final class MockURLProtocol: URLProtocol, @unchecked Sendable {
         #expect(OpenAICompatibleProvider.classify("tts-1-hd") == nil)
         #expect(OpenAICompatibleProvider.classify("text-embedding-3-large")?.capabilities == [.embedding])
         #expect(OpenAICompatibleProvider.classify("gpt-4o-mini")?.capabilities.contains(.vision) == true)
+    }
+
+    @Test func crossHostRedirectIsNotFollowed() async {
+        MockURLProtocol.reset([(307, ["Location": "https://evil.example.net/v1/chat/completions"], [:])])
+        let provider = OpenAICompatibleProvider(kind: .openAI, endpoint: "https://api.example.com/v1", apiKey: "k",
+                                                configuration: MockURLProtocol.configuration)
+        do {
+            _ = try await provider.chat(model: "m", messages: [ChatMessage(role: "user", content: "screenshot text")])
+            Issue.record("expected the redirect to be refused")
+        } catch let error as AIProviderError {
+            #expect(error.isOutage)
+            if case .redirectRefused = error {} else { Issue.record("unexpected \(error)") }
+        } catch {
+            Issue.record("unexpected \(error)")
+        }
+        #expect(MockURLProtocol.captured.allSatisfy { $0.request.url?.host == "api.example.com" })
     }
 
     @Test func missingOpenAIKeyFailsFast() async {

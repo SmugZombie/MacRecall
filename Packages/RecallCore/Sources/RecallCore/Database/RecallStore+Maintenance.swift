@@ -83,7 +83,8 @@ extension RecallStore {
     public func clearAIMetadata() throws {
         try db.transaction {
             try db.run("UPDATE captures SET ai_description = '', ai_json = NULL, ai_status = 'pending'")
-            try db.run("UPDATE sessions SET summary = '', classification_confidence = NULL WHERE 1")
+            try db.run("UPDATE sessions SET summary = '', summary_source = 'none' WHERE summary_source != 'user'")
+            try db.run("UPDATE sessions SET classification_confidence = NULL")
             try db.run("UPDATE sessions SET title_source = 'deterministic' WHERE title_source = 'ai'")
             try db.run("DELETE FROM embeddings")
             try db.run("DELETE FROM daily_summaries")
@@ -100,7 +101,9 @@ extension RecallStore {
                 INSERT INTO capture_fts(rowid, app_name, window_title, ocr_text, ai_description, project)
                 SELECT c.id, a.name, COALESCE(w.title, ''), c.ocr_text, c.ai_description, COALESCE(p.name, '')
                 FROM captures c JOIN applications a ON a.id = c.application_id
-                LEFT JOIN windows w ON w.id = c.window_id LEFT JOIN projects p ON p.id = c.project_id
+                LEFT JOIN windows w ON w.id = c.window_id
+                LEFT JOIN sessions s ON s.id = c.activity_session_id
+                LEFT JOIN projects p ON p.id = COALESCE(c.project_id, s.project_id)
                 """)
             try db.run("""
                 INSERT INTO session_fts(rowid, title, summary, project)

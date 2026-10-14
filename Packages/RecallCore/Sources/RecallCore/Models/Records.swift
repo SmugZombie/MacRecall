@@ -117,11 +117,14 @@ public struct SessionRecord: Sendable, Identifiable, Hashable {
     public var title: String
     public var titleSource: String
     public var summary: String
+    /// "none", "ai" or "user". AI never overwrites a user-written summary.
+    public var summarySource: String
     public var projectID: Int64?
     public var projectName: String?
     public var projectSource: String
     public var classificationConfidence: Double?
     public var activeSeconds: Double
+    /// The user curated this session's grouping (merged or split it); automatic regrouping leaves it alone.
     public var userLocked: Bool
     public var captureCount: Int
     public var applicationNames: [String]

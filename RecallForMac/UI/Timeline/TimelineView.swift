@@ -17,6 +17,7 @@ struct TimelineView: View {
     @State private var scrubIndex: Double = 0
     @State private var hasMore = true
     @State private var renaming: SessionRecord?
+    @State private var editingSummary: SessionRecord?
     @State private var projects: [ProjectRecord] = []
     private let pageSize = 60
 
@@ -43,6 +44,12 @@ struct TimelineView: View {
         .task(id: TaskKey(range: range, revision: state.revision, app: appFilter, project: projectID)) { await reload() }
         .onChange(of: nav.captureID) {
             if let id = nav.captureID { selectedCaptureID = id; nav.captureID = nil }
+        }
+        .sheet(item: $editingSummary) { session in
+            EditSummarySheet(session: session) { text in
+                try? state.store?.setSessionSummary(id: session.id, summary: text)
+                state.historyChanged()
+            }
         }
         .sheet(item: $renaming) { session in
             RenameSessionSheet(session: session) { newTitle in
@@ -116,6 +123,7 @@ struct TimelineView: View {
 
     @ViewBuilder private func sessionMenu(_ session: SessionRecord) -> some View {
         Button("Rename…") { renaming = session }
+        Button("Edit Summary…") { editingSummary = session }
         Menu("Assign to Project") {
             Button("None") { setProject(session, nil) }
             Divider()
@@ -128,7 +136,7 @@ struct TimelineView: View {
                 state.historyChanged()
             }
         }
-        Button("Regenerate Summary") {
+        Button(session.summarySource == "user" ? "Regenerate Summary (keeps your text)" : "Regenerate Summary") {
             try? state.store?.enqueueJob(.sessionSummary, entityType: "session", entityID: session.id, priority: 90)
             state.refreshQueue()
         }
@@ -237,6 +245,32 @@ struct SessionRow: View {
             }
         }
         .padding(.vertical, 4)
+    }
+}
+
+struct EditSummarySheet: View {
+    let session: SessionRecord
+    let onSave: (String) -> Void
+    @State private var text = ""
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Edit Summary").font(.headline)
+            TextEditor(text: $text)
+                .font(.body)
+                .frame(width: 440, height: 140)
+                .overlay(RoundedRectangle(cornerRadius: 4).stroke(.quaternary))
+            Text("AI won't overwrite a summary you write. Clear it to let AI summarize this session again.")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                Button("Save") { onSave(text); dismiss() }.keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .onAppear { text = session.summary }
     }
 }
 

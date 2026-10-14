@@ -70,8 +70,8 @@ public struct KeywordSearch: Sendable {
         var params: [SQLBindable] = [fts]
         appendScope(scope, to: &sql, params: &params, timeColumn: "c.captured_at")
         if let projectID = scope.projectID {
-            sql += " AND c.project_id = ?"
-            params.append(projectID)
+            sql += " AND (c.project_id = ? OR c.activity_session_id IN (SELECT id FROM sessions WHERE project_id = ?))"
+            params += [projectID, projectID]
         }
         sql += " ORDER BY score LIMIT ? OFFSET ?"
         params += [limit, offset]

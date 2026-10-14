@@ -7,6 +7,26 @@ public struct OCRLine: Sendable {
     public var confidence: Float
     /// Normalized, bottom-left origin (Vision coordinates).
     public var boundingBox: CGRect
+    /// Box of a substring, when the recognizer can report it (same coordinate space).
+    public var locate: (@Sendable (Range<String.Index>) -> CGRect?)?
+
+    public init(text: String, confidence: Float, boundingBox: CGRect, locate: (@Sendable (Range<String.Index>) -> CGRect?)? = nil) {
+        self.text = text
+        self.confidence = confidence
+        self.boundingBox = boundingBox
+        self.locate = locate
+    }
+
+    /// Where `range` sits on screen: Vision's own box if available, otherwise estimated from the
+    /// character offsets within the line (exact for monospaced text, close for proportional).
+    public func box(for range: Range<String.Index>) -> CGRect {
+        if let exact = locate?(range), !exact.isEmpty { return exact }
+        let count = max(1, text.count)
+        let start = text.distance(from: text.startIndex, to: range.lowerBound)
+        let length = text.distance(from: range.lowerBound, to: range.upperBound)
+        let x = boundingBox.minX + boundingBox.width * CGFloat(start) / CGFloat(count)
+        return CGRect(x: x, y: boundingBox.minY, width: boundingBox.width * CGFloat(length) / CGFloat(count), height: boundingBox.height)
+    }
 }
 
 public struct OCRResult: Sendable {
@@ -48,7 +68,11 @@ public struct VisionOCRService: Sendable {
         // Vision returns observations roughly top-to-bottom; sort explicitly to keep reading order stable.
         let lines = observations.compactMap { obs -> OCRLine? in
             guard let candidate = obs.topCandidates(1).first else { return nil }
-            return OCRLine(text: candidate.string, confidence: candidate.confidence, boundingBox: obs.boundingBox)
+            let text = candidate.string
+            return OCRLine(text: text, confidence: candidate.confidence, boundingBox: obs.boundingBox) { range in
+                // Vision expects ranges into its own string; ours is the same value.
+                (try? candidate.boundingBox(for: range))?.boundingBox
+            }
         }.sorted {
             abs($0.boundingBox.midY - $1.boundingBox.midY) > 0.01
                 ? $0.boundingBox.midY > $1.boundingBox.midY
