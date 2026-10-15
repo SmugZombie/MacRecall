@@ -70,6 +70,44 @@ extension RecallStore {
         try db.run("UPDATE sessions SET project_id = project_id WHERE project_id = ?", [id])
     }
 
+    // MARK: Suggestions
+
+    static let dismissedSuggestionsKey = "project_suggestions_dismissed"
+
+    /// Projects that recur in recent activity not yet assigned to any project.
+    public func projectSuggestions(lookback: TimeInterval = 30 * 86400, now: Date = Date(),
+                                   suggester: ProjectSuggester = ProjectSuggester()) throws -> [ProjectSuggestion] {
+        // Only OCR text that can contain a path is loaded; most captures contribute just their title and AI hint.
+        let rows = try db.query("""
+            SELECT c.captured_at, a.name AS app_name, COALESCE(w.title, '') AS window_title,
+                CASE WHEN json_valid(c.ai_json) THEN json_extract(c.ai_json, '$.project') END AS ai_project,
+                CASE WHEN instr(c.ocr_text, '~/') > 0 OR instr(c.ocr_text, '/Users/') > 0 THEN c.ocr_text ELSE '' END AS path_text
+            FROM captures c
+            JOIN applications a ON a.id = c.application_id
+            LEFT JOIN windows w ON w.id = c.window_id
+            LEFT JOIN sessions s ON s.id = c.activity_session_id
+            WHERE c.captured_at >= ? AND c.project_id IS NULL AND s.project_id IS NULL
+                AND (ai_project IS NOT NULL OR instr(window_title, '/') > 0 OR path_text != '')
+            """, [now.addingTimeInterval(-lookback)])
+        let observations = rows.map {
+            ProjectSuggester.Observation(capturedAt: $0.date("captured_at") ?? now, applicationName: $0.string("app_name") ?? "",
+                                         windowTitle: $0.string("window_title") ?? "", aiProject: $0.string("ai_project"),
+                                         pathText: $0.string("path_text") ?? "")
+        }
+        return suggester.suggest(observations, existing: try projects(), dismissed: try dismissedProjectSuggestions())
+    }
+
+    public func dismissedProjectSuggestions() throws -> Set<String> {
+        let data = try setting(Self.dismissedSuggestionsKey)?.data(using: .utf8)
+        return Set(data.flatMap { try? JSONDecoder().decode([String].self, from: $0) } ?? [])
+    }
+
+    /// Hides a suggestion for good; it won't come back however often the name recurs.
+    public func dismissProjectSuggestion(_ suggestion: ProjectSuggestion) throws {
+        let keys = try dismissedProjectSuggestions().union([suggestion.id])
+        try setSetting(Self.dismissedSuggestionsKey, String(data: try JSONEncoder().encode(keys.sorted()), encoding: .utf8) ?? "[]")
+    }
+
     public func projectActiveSeconds(projectID: Int64, from start: Date = .distantPast, to end: Date = .distantFuture) throws -> Double {
         try db.queryOne("SELECT COALESCE(SUM(active_seconds), 0) AS total FROM sessions WHERE project_id = ? AND started_at >= ? AND started_at < ?",
                         [projectID, start, end])?.double("total") ?? 0

@@ -70,7 +70,7 @@ Packages/RecallCore/          All logic, unit-tested with `swift test`
   OCR/                        Apple Vision text recognition
   AI/                         AIProvider protocol; Ollama, OpenAI-compatible (OpenAI, LM Studio) and Bedrock
                               (Converse + SigV4, no AWS SDK) providers; output validation; job queue
-  Activity/                   Deterministic SessionBuilder, ProjectClassifier, daily summaries
+  Activity/                   Deterministic SessionBuilder, ProjectClassifier, ProjectSuggester, daily summaries
   Search/                     Query interpretation, FTS5 search, vector index, hybrid RRF, grounded Q&A
   Privacy/                    CapturePolicy, sensitive-content redaction, retention
   Updates/                    GitHub release client, semantic versions, verified in-place installer
@@ -118,5 +118,5 @@ Jobs live in the `ai_jobs` table with a partial unique index so a pending/runnin
 - **Cloud providers are tested against recorded request/response shapes and the AWS SigV4 test vectors, not live accounts.** Verify with your own OpenAI key / AWS account.
 - With ad hoc signing, macOS may ask again for keychain access after each rebuild.
 - **Notarization**: hardened runtime is on, but distribution signing/notarization needs a Developer ID.
-- Project "learning" is limited to rule matching plus the AI's project hint; there is no suggestion UI for new projects yet.
+- Project suggestions are rule-based: names the AI saw on screen plus repository folders (`~/Github/<name>`, `~/src/<name>`, …) that recur in unassigned activity. Different names for one project (e.g. an app and its repo) appear as separate suggestions.
 - On macOS 15+, the OS periodically re-asks the user to confirm continued screen recording for apps using ScreenCaptureKit. That is system behavior and can't be suppressed.

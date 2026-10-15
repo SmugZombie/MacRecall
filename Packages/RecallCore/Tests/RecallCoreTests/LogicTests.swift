@@ -300,3 +300,68 @@ import Testing
                                                          from: t.addingTimeInterval(10), to: .distantFuture, limit: 3).isEmpty)
     }
 }
+
+@Suite struct ProjectSuggesterTests {
+    let t0 = Date(timeIntervalSince1970: 1_700_000_000)
+
+    func obs(day: Int, app: String = "Code", title: String = "", ai: String? = nil, text: String = "") -> ProjectSuggester.Observation {
+        ProjectSuggester.Observation(capturedAt: t0.addingTimeInterval(Double(day) * 86400), applicationName: app,
+                                     windowTitle: title, aiProject: ai, pathText: text)
+    }
+
+    @Test func extractsRepositories() {
+        let repos = ProjectSuggester.repositories(in: "regli@mac ~/Github/MacRecall/Packages % cd /Users/regli/src/truesoc.git")
+        #expect(repos.map(\.name) == ["MacRecall", "truesoc"])
+        #expect(repos.map(\.path) == ["~/Github/MacRecall", "~/src/truesoc"])
+        #expect(ProjectSuggester.repositories(in: "~/Documents/notes.txt /usr/local/src/x").isEmpty)
+    }
+
+    @Test func recurringNamesBecomeSuggestions() {
+        var items: [ProjectSuggester.Observation] = []
+        for day in 0..<3 {
+            items.append(obs(day: day, ai: "MacRecall"))
+            items.append(obs(day: day, ai: "Mac Recall"))
+            items.append(obs(day: day, app: "Terminal", text: "~/Github/MacRecall % swift test"))
+        }
+        items.append(obs(day: 0, ai: "OneOff"))
+        let suggestions = ProjectSuggester().suggest(items, existing: [])
+        #expect(suggestions.count == 1)
+        let s = suggestions[0]
+        #expect(s.name == "MacRecall")
+        #expect(s.aliases == ["Mac Recall"])
+        #expect(s.repositoryPaths == ["~/Github/MacRecall"])
+        #expect(s.captureCount == 9)
+        #expect(s.dayCount == 3)
+    }
+
+    @Test func skipsKnownGenericAndDismissedNames() {
+        var items: [ProjectSuggester.Observation] = []
+        for day in 0..<3 {
+            for name in ["truesoc", "Xcode", "Personal", "Hidden", "Fresh"] {
+                items += Array(repeating: obs(day: day, app: "Xcode", ai: name), count: 2)
+            }
+            items.append(obs(day: day, text: "~/Github/old-repo"))
+            items.append(obs(day: day, text: "~/Github/old-repo"))
+        }
+        let existing = [ProjectRecord(id: 1, name: "TrueSOC", description: "",
+                                      rules: ProjectRules(repositoryPaths: ["~/Github/old-repo"]), createdAt: t0)]
+        let names = ProjectSuggester().suggest(items, existing: existing, dismissed: ["hidden"]).map(\.name)
+        #expect(names == ["Fresh"])
+    }
+
+    @Test func storeSuggestsOnlyUnassignedActivity() throws {
+        let store = try makeStore()
+        let json = #"{"activity":"Dev","description":"Editing","project":"Atlas","applications":[],"topics":[],"confidence":0.9}"#
+        for day in 0..<3 {
+            for i in 0..<2 {
+                let c = try addCapture(store, app: "Code", bundle: "com.microsoft.VSCode", title: "main.go",
+                                       at: Date().addingTimeInterval(-Double(day) * 86400 - Double(i) * 60))
+                try store.updateAI(captureID: c.id, description: "Editing", json: json, status: .done)
+            }
+        }
+        #expect(try store.projectSuggestions().map(\.name) == ["Atlas"])
+
+        try store.dismissProjectSuggestion(try store.projectSuggestions()[0])
+        #expect(try store.projectSuggestions().isEmpty)
+    }
+}

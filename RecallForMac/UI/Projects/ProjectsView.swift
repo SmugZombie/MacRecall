@@ -8,6 +8,8 @@ struct ProjectsView: View {
     @State private var editing: ProjectRecord?
     @State private var creating = false
     @State private var mergeSource: ProjectRecord?
+    @State private var suggestions: [ProjectSuggestion] = []
+    @State private var accepting: ProjectSuggestion?
 
     var body: some View {
         HSplitView {
@@ -25,6 +27,13 @@ struct ProjectsView: View {
                                 state.historyChanged()
                             }
                         }
+                }
+                if !suggestions.isEmpty {
+                    Section("Suggested") {
+                        ForEach(suggestions) { suggestion in
+                            SuggestionRow(suggestion: suggestion, onAccept: { accepting = suggestion }, onDismiss: { dismiss(suggestion) })
+                        }
+                    }
                 }
             }
             .frame(minWidth: 180, idealWidth: 220, maxWidth: 300)
@@ -55,15 +64,15 @@ struct ProjectsView: View {
             .frame(minWidth: 500, maxWidth: .infinity, maxHeight: .infinity)
         }
         .navigationTitle("Projects")
-        .task(id: state.revision) { reload() }
+        .task(id: state.revision) {
+            reload()
+            await loadSuggestions()
+        }
         .sheet(isPresented: $creating) {
-            ProjectEditor(project: nil) { name, description, rules in
-                if let id = try? state.store?.createProject(name: name, description: description, rules: rules) {
-                    selection = id
-                    reassociateRecent()
-                }
-                reload()
-            }
+            ProjectEditor(project: nil, onSave: create)
+        }
+        .sheet(item: $accepting) { suggestion in
+            ProjectEditor(project: nil, suggestion: suggestion, onSave: create)
         }
         .sheet(item: $editing) { project in
             ProjectEditor(project: project) { name, description, rules in
@@ -88,6 +97,25 @@ struct ProjectsView: View {
     }
 
     private func reload() { projects = (try? state.store?.projects()) ?? [] }
+
+    private func loadSuggestions() async {
+        guard let store = state.store else { return }
+        suggestions = await Task.detached(priority: .utility) { (try? store.projectSuggestions()) ?? [] }.value
+    }
+
+    private func create(name: String, description: String, rules: ProjectRules) {
+        if let id = try? state.store?.createProject(name: name, description: description, rules: rules) {
+            selection = id
+            suggestions.removeAll { ProjectSuggester.key($0.name) == ProjectSuggester.key(name) }
+            reassociateRecent()
+        }
+        reload()
+    }
+
+    private func dismiss(_ suggestion: ProjectSuggestion) {
+        try? state.store?.dismissProjectSuggestion(suggestion)
+        suggestions.removeAll { $0.id == suggestion.id }
+    }
 
     /// New or changed rules apply to the last two weeks of unassigned sessions.
     private func reassociateRecent() {
@@ -152,8 +180,40 @@ struct ProjectDetailView: View {
     }
 }
 
+struct SuggestionRow: View {
+    let suggestion: ProjectSuggestion
+    let onAccept: () -> Void
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(suggestion.name)
+                Text(detail).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+            Button(action: onAccept) { Image(systemName: "plus.circle") }.help("Create this project…")
+            Button(action: onDismiss) { Image(systemName: "xmark.circle") }.help("Don’t suggest this again")
+        }
+        .buttonStyle(.borderless)
+        .foregroundStyle(.secondary)
+        .contextMenu {
+            Button("Create Project…", action: onAccept)
+            Button("Don’t Suggest Again", action: onDismiss)
+        }
+    }
+
+    private var detail: String {
+        let days = suggestion.dayCount == 1 ? "1 day" : "\(suggestion.dayCount) days"
+        let last = suggestion.lastSeen.formatted(.relative(presentation: .named))
+        return "\(days) · \(suggestion.captureCount) captures · \(last)"
+    }
+}
+
 struct ProjectEditor: View {
     let project: ProjectRecord?
+    /// Prefills a new project from a suggestion.
+    var suggestion: ProjectSuggestion?
     let onSave: (String, String, ProjectRules) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
@@ -191,6 +251,11 @@ struct ProjectEditor: View {
         .padding(20)
         .frame(width: 480)
         .onAppear {
+            if project == nil, let suggestion {
+                name = suggestion.name
+                aliases = suggestion.aliases.joined(separator: ", ")
+                paths = suggestion.repositoryPaths.joined(separator: ", ")
+            }
             guard let project else { return }
             name = project.name
             description = project.description
