@@ -17,6 +17,7 @@ struct CaptureDetailView: View {
     @State private var previousID: Int64?
     @State private var nextID: Int64?
     @State private var position: (index: Int, count: Int)?
+    @State private var viewing: CaptureRecord?
 
     var body: some View {
         ScrollView {
@@ -25,8 +26,8 @@ struct CaptureDetailView: View {
                     navigation(capture)
                     StoredImage(relativePath: capture.imagePath)
                         .clipShape(RoundedRectangle(cornerRadius: 6))
-                        .onTapGesture(count: 2) { openInPreview(capture) }
-                        .help("Double-click to open in Preview")
+                        .onTapGesture(count: 2) { viewing = capture }
+                        .help("Double-click to view full size")
                     metadata(capture)
                     aiSection(capture)
                     if let session { sessionSection(session) }
@@ -39,6 +40,9 @@ struct CaptureDetailView: View {
             }
         }
         .task(id: "\(captureID)-\(state.revision)") { load() }
+        .sheet(item: $viewing) { capture in
+            ScreenshotViewer(capture: capture) { exportScreenshot(capture) }
+        }
     }
 
     private func load() {
@@ -100,8 +104,8 @@ struct CaptureDetailView: View {
                 ProcessingBadge(capture: c)
                 Spacer()
                 Menu {
-                    Button("Open in Preview") { openInPreview(c) }
-                    Button("Reveal in Finder") { reveal(c) }
+                    Button("View Full Size") { viewing = c }
+                    Button("Export Screenshot…") { exportScreenshot(c) }
                     Button("Copy OCR Text") { copy(c.ocrText) }.disabled(c.ocrText.isEmpty)
                     Divider()
                     Button("Analyze Now") { state.prioritize(captureID: c.id) }
@@ -200,18 +204,88 @@ struct CaptureDetailView: View {
         }
     }
 
-    private func openInPreview(_ c: CaptureRecord) {
+    /// Screenshots are encrypted on disk, so other apps get a decrypted copy only by exporting one.
+    private func exportScreenshot(_ c: CaptureRecord) {
         guard let store = state.store else { return }
-        NSWorkspace.shared.open(store.paths.absolute(c.imagePath))
-    }
-
-    private func reveal(_ c: CaptureRecord) {
-        guard let store = state.store else { return }
-        NSWorkspace.shared.activateFileViewerSelecting([store.paths.absolute(c.imagePath)])
+        let data: Data
+        do {
+            data = try store.vault.read(c.imagePath)
+        } catch {
+            NSAlert(error: error).runModal()
+            return
+        }
+        let panel = NSSavePanel()
+        let ext = (c.imagePath as NSString).pathExtension
+        let stamp = c.capturedAt.formatted(.iso8601.year().month().day().time(includingFractionalSeconds: false)
+            .dateTimeSeparator(.space).timeSeparator(.omitted))
+        panel.nameFieldStringValue = "\(c.applicationName) \(stamp).\(ext)"
+        panel.message = "The exported copy isn't encrypted."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try data.write(to: url, options: .atomic)
+        } catch {
+            NSAlert(error: error).runModal()
+        }
     }
 
     private func copy(_ text: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
+    }
+}
+
+/// Full-resolution view of one screenshot, decrypted in memory.
+private struct ScreenshotViewer: View {
+    let capture: CaptureRecord
+    let onExport: () -> Void
+    @EnvironmentObject private var state: AppState
+    @Environment(\.dismiss) private var dismiss
+    @State private var image: NSImage?
+    @State private var error: String?
+    @State private var actualSize = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("\(capture.applicationName) · \(capture.capturedAt.formatted(date: .abbreviated, time: .standard))")
+                    .font(.headline)
+                Spacer()
+                Picker("", selection: $actualSize) {
+                    Text("Fit").tag(false)
+                    Text("Actual Size").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
+                Button("Export…", action: onExport)
+                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
+            }
+            .padding(12)
+            Divider()
+            Group {
+                if let image {
+                    if actualSize {
+                        ScrollView([.horizontal, .vertical]) {
+                            Image(nsImage: image).frame(width: image.size.width, height: image.size.height)
+                        }
+                    } else {
+                        Image(nsImage: image).resizable().aspectRatio(contentMode: .fit).padding(12)
+                    }
+                } else if let error {
+                    ContentUnavailableView("Can't Show Screenshot", systemImage: "lock.fill", description: Text(error))
+                } else {
+                    ProgressView()
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(minWidth: 800, idealWidth: 1100, minHeight: 560, idealHeight: 760)
+        .task {
+            guard let vault = state.store?.vault else { return }
+            do {
+                image = try await ImageCache.shared.image(capture.imagePath, maxPixel: nil, vault: vault)
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
     }
 }

@@ -62,8 +62,9 @@ public enum ImageProcessing {
         try data.write(to: url, options: [.atomic])
     }
 
-    public static func load(_ url: URL, maxPixel: Int? = nil) -> CGImage? {
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+    /// Decodes image bytes. Stored files are encrypted, so read them through `ScreenshotVault`.
+    public static func load(_ data: Data, maxPixel: Int? = nil) -> CGImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
         if let maxPixel {
             let options: [CFString: Any] = [
                 kCGImageSourceCreateThumbnailFromImageAlways: true,
@@ -73,12 +74,6 @@ public enum ImageProcessing {
             return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
         }
         return CGImageSourceCreateImageAtIndex(source, 0, nil)
-    }
-
-    /// JPEG bytes suitable for sending to a vision model (bounded size).
-    public static func jpegForModel(_ url: URL, maxPixel: Int = 1344) throws -> Data {
-        guard let image = load(url, maxPixel: maxPixel) else { throw CocoaError(.fileReadCorruptFile) }
-        return try encode(image, format: .jpeg, quality: 0.8)
     }
 }
 

@@ -12,16 +12,18 @@ final class ImageCache: @unchecked Sendable {
         return c
     }()
 
-    func image(for url: URL, maxPixel: Int?) async -> NSImage? {
-        let key = "\(url.path)#\(maxPixel ?? 0)" as NSString
+    func removeAll() { cache.removeAllObjects() }
+
+    /// Decrypts and decodes a stored image. Throws `ScreenshotVault.Failure.missingKey` for screenshots
+    /// encrypted with a key that isn't on this Mac.
+    func image(_ relativePath: String, maxPixel: Int?, vault: ScreenshotVault) async throws -> NSImage {
+        let key = "\(relativePath)#\(maxPixel ?? 0)" as NSString
         if let hit = cache.object(forKey: key) { return hit }
-        let image = await Task.detached(priority: .userInitiated) { () -> NSImage? in
-            guard let cg = ImageProcessing.load(url, maxPixel: maxPixel) else { return nil }
+        let image = try await Task.detached(priority: .userInitiated) { () throws -> NSImage in
+            let cg = try vault.image(relativePath, maxPixel: maxPixel)
             return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
         }.value
-        if let image {
-            cache.setObject(image, forKey: key, cost: Int(image.size.width * image.size.height * 4))
-        }
+        cache.setObject(image, forKey: key, cost: Int(image.size.width * image.size.height * 4))
         return image
     }
 }
@@ -33,6 +35,7 @@ struct StoredImage: View {
     @EnvironmentObject private var state: AppState
     @State private var image: NSImage?
     @State private var failed = false
+    @State private var locked = false
 
     var body: some View {
         Group {
@@ -41,16 +44,23 @@ struct StoredImage: View {
             } else if failed {
                 ZStack {
                     Rectangle().fill(.quaternary)
-                    Image(systemName: "photo.badge.exclamationmark").foregroundStyle(.secondary)
+                    Image(systemName: locked ? "lock.fill" : "photo.badge.exclamationmark").foregroundStyle(.secondary)
                 }
+                .help(locked ? "Encrypted with a key that isn't on this Mac. Import its recovery key in Settings → Privacy." : "")
             } else {
                 Rectangle().fill(.quaternary.opacity(0.5)).overlay(ProgressView().controlSize(.small))
             }
         }
         .task(id: relativePath) {
             guard let store = state.store, !relativePath.isEmpty else { failed = true; return }
-            image = await ImageCache.shared.image(for: store.paths.absolute(relativePath), maxPixel: maxPixel)
-            failed = image == nil
+            do {
+                image = try await ImageCache.shared.image(relativePath, maxPixel: maxPixel, vault: store.vault)
+                failed = false
+            } catch {
+                image = nil
+                failed = true
+                locked = (error as? ScreenshotVault.Failure) == .missingKey
+            }
         }
     }
 }

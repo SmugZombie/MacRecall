@@ -43,6 +43,17 @@ Choose a provider in **Settings → AI**, then pick three models: **vision** (de
 - Recall never downloads models itself.
 - If the provider is offline or rejects credentials, AI jobs wait in the durable queue without using up retries. Capture, OCR, the timeline and keyword search keep working.
 
+### Screenshot encryption
+
+Screenshots and thumbnails are encrypted on disk with AES-GCM (CryptoKit), so other apps can't read them from `Application Support`. The key is created on first launch and kept in the login keychain, which hands it to Recall without asking and prompts for any other app. Each file is bound to its path in the library, and decrypted images only exist in memory. To give another app a copy, use **Export Screenshot…** in a screenshot's detail view.
+
+- Screenshots from earlier versions are encrypted in the background after updating. Settings → Privacy → Screenshot encryption shows progress.
+- **Keep a recovery key.** If the keychain item is lost (a reset keychain, or a new Mac without it), screenshots can't be opened. **Export Recovery Key…** saves the key to a file; anyone with that file and a copy of the library can view the screenshots, so store it privately. **Import Recovery Key…** unlocks them again. New captures keep working without the old key.
+- If the keychain can't be read (for example, it's locked), captures fail rather than being saved unencrypted.
+- Builds signed with a different identity (for example, Xcode debug builds vs. releases) cause a one-time keychain prompt.
+
+The design and its limits are in [design/screenshot-encryption.md](design/screenshot-encryption.md).
+
 ### Updates
 
 Recall checks GitHub Releases for this repository once a day (and from **Check for Updates…** in the app menu or Settings → General). When a newer version is out, it shows the release notes and can install it in place:
@@ -112,7 +123,7 @@ Jobs live in the `ai_jobs` table with a partial unique index so a pending/runnin
 
 ### Known gaps
 
-- **Encrypted storage** is not implemented. The system SQLite has no encryption; options are SQLCipher (adds a dependency) or encrypting image files with a Keychain-held key. Today the data relies on FileVault.
+- **Only screenshots are encrypted.** Screenshots and thumbnails are encrypted at rest (see [Screenshot encryption](#screenshot-encryption)), but the database — recognized text, AI descriptions, window titles, summaries — is plain SQLite and relies on FileVault. SQLCipher is the likely next step.
 - **Vector search** is an exact streaming scan behind a `VectorIndex` protocol — fine for a single user's history (especially time-filtered), replaceable with sqlite-vec/HNSW later.
 - **Notifications** and a configurable hot key are not implemented (the hot key is fixed to ⌃⌥⌘P).
 - **Cloud providers are tested against recorded request/response shapes and the AWS SigV4 test vectors, not live accounts.** Verify with your own OpenAI key / AWS account.

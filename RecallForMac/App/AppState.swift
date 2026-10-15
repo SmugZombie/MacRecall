@@ -58,6 +58,11 @@ final class AppState: ObservableObject {
     @Published private(set) var lastSkipReason: SkipReason?
     /// Bumped whenever history changes so views can reload.
     @Published private(set) var revision = 0
+    /// Why screenshots couldn't be encrypted, if they couldn't.
+    @Published private(set) var imageEncryptionProblem: String?
+    /// The first pass over screenshots saved before encryption is still running.
+    @Published private(set) var encryptingImages = false
+    private var imageEncryptionRunning = false
     @Published var launchAtLogin = SMAppService.mainApp.status == .enabled
 
     private var timers: [Timer] = []
@@ -123,10 +128,14 @@ final class AppState: ObservableObject {
             MainActor.assumeIsolated { self?.refreshPermissions() }
         })
         timers.append(Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.runRetention() }
+            MainActor.assumeIsolated {
+                self?.runRetention()
+                self?.encryptStoredImages()
+            }
         })
         updateSessions()
         runRetention()
+        encryptStoredImages()
         scheduleYesterdaySummary()
 
         hotKey = GlobalHotKey { [weak self] in self?.toggleRecording() }
@@ -324,6 +333,27 @@ final class AppState: ObservableObject {
         let days = settings.retentionDays
         Task.detached(priority: .background) {
             _ = try? RetentionManager(store: store).enforce(retentionDays: days)
+        }
+    }
+
+    /// Encrypts unencrypted screenshots in small batches: those from before encryption, then hourly any
+    /// written by an older version. Also retries hourly if the key was unavailable.
+    func encryptStoredImages() {
+        guard let store, !imageEncryptionRunning else { return }
+        imageEncryptionRunning = true
+        encryptingImages = (try? store.imagesEncrypted()) != true
+        Task.detached(priority: .background) {
+            var problem: String?
+            do {
+                while try !store.encryptStoredImages(limit: 100) {}
+            } catch {
+                problem = error.localizedDescription
+            }
+            await MainActor.run {
+                AppState.shared.imageEncryptionRunning = false
+                AppState.shared.encryptingImages = false
+                AppState.shared.imageEncryptionProblem = problem
+            }
         }
     }
 

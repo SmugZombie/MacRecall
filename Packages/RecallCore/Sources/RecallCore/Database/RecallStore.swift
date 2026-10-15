@@ -67,19 +67,23 @@ public struct TimelineFilter: Sendable, Equatable {
 public final class RecallStore: @unchecked Sendable {
     public let db: SQLiteDatabase
     public let paths: StoragePaths
+    /// Reads and writes screenshots and thumbnails, encrypted at rest.
+    public let vault: ScreenshotVault
 
-    public init(paths: StoragePaths) throws {
+    public init(paths: StoragePaths, keyStore: any ScreenshotKeyStore = KeychainScreenshotKeyStore()) throws {
         try paths.createDirectories()
         self.paths = paths
         self.db = try SQLiteDatabase(path: paths.database.path)
+        self.vault = ScreenshotVault(paths: paths, keyStore: keyStore)
         try Migrations.migrate(db)
     }
 
     /// In-memory store for tests and previews.
-    public init(inMemoryWithRoot root: URL) throws {
+    public init(inMemoryWithRoot root: URL, keyStore: any ScreenshotKeyStore = InMemoryScreenshotKeyStore()) throws {
         self.paths = StoragePaths(root: root)
         try paths.createDirectories()
         self.db = try SQLiteDatabase(path: ":memory:")
+        self.vault = ScreenshotVault(paths: paths, keyStore: keyStore)
         try Migrations.migrate(db)
     }
 

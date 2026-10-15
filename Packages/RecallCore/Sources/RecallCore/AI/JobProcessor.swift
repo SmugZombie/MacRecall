@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 /// Executes individual jobs. Stateless apart from its dependencies; the queue handles scheduling.
@@ -33,7 +34,13 @@ public struct JobProcessor: Sendable {
 
     func runOCR(captureID: Int64) async throws {
         guard let capture = try store.capture(id: captureID) else { return }
-        guard let image = ImageProcessing.load(store.paths.absolute(capture.imagePath)) else {
+        let image: CGImage
+        do {
+            image = try store.vault.image(capture.imagePath)
+        } catch ScreenshotVault.Failure.keyUnavailable(let reason) {
+            // The keychain may just be locked; leave OCR pending and let the queue retry.
+            throw ScreenshotVault.Failure.keyUnavailable(reason)
+        } catch {
             try store.setOCRStatus(captureID: captureID, .failed)
             return
         }
@@ -81,7 +88,7 @@ public struct JobProcessor: Sendable {
                 let user = Prompts.visionUser(app: capture.applicationName, title: capture.windowTitle,
                                               timestamp: Self.localTimestamp(capture.capturedAt, tz: capture.timezone),
                                               ocr: fullOCR.clipped(budget.ocrCharacters), previous: Array(previous.prefix(budget.previousItems)))
-                let images = useVision ? [try ImageProcessing.jpegForModel(store.paths.absolute(capture.imagePath), maxPixel: budget.imagePixels)] : nil
+                let images = useVision ? [try ImageProcessing.encode(store.vault.image(capture.imagePath, maxPixel: budget.imagePixels), format: .jpeg, quality: 0.8)] : nil
                 do {
                     let raw = try await ai.chat(model: model, messages: [
                         ChatMessage(role: "system", content: Prompts.visionSystem()),

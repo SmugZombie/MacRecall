@@ -107,6 +107,7 @@ private struct PrivacySettings: View {
                 Stepper("Keep screenshots for \(state.settings.retentionDays) days", value: $state.settings.retentionDays, in: 1...3650)
                 Toggle("Delete older history automatically", isOn: $state.settings.automaticCleanup)
             }
+            ScreenshotEncryptionSection()
             Section("Sensitive content") {
                 Toggle("Redact matching text before storing or sending to AI", isOn: $state.settings.redactionEnabled)
                 if state.settings.redactionEnabled {
@@ -537,5 +538,77 @@ struct PermissionStatus: View {
     var body: some View {
         Label(granted ? "Granted" : "Not granted", systemImage: granted ? "checkmark.circle.fill" : "xmark.circle")
             .foregroundStyle(granted ? .green : .orange)
+    }
+}
+
+/// Settings → Privacy → Screenshot encryption.
+private struct ScreenshotEncryptionSection: View {
+    @EnvironmentObject private var state: AppState
+    @State private var message: String?
+
+    var body: some View {
+        Section("Screenshot encryption") {
+            LabeledContent("Status") {
+                if let problem = state.imageEncryptionProblem {
+                    Label(problem, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                } else if state.encryptingImages {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Encrypting existing screenshots…")
+                    }
+                } else {
+                    Label("Encrypted", systemImage: "lock.fill").foregroundStyle(.green)
+                }
+            }
+            HStack {
+                Button("Export Recovery Key…") { exportKey() }
+                Button("Import Recovery Key…") { importKey() }
+                Spacer()
+            }
+            if let message { Text(message).font(.caption).foregroundStyle(.secondary) }
+            Text("Screenshots and thumbnails are encrypted with a key kept in your login keychain, so other apps can't read them from disk. If the key is lost (for example, after resetting the keychain or moving to a new Mac without it), your screenshots can't be opened. Export the recovery key and keep it somewhere safe and private; anyone with it and a copy of your library can view your screenshots.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func exportKey() {
+        guard let vault = state.store?.vault else { return }
+        let text: String
+        do {
+            text = try vault.exportRecoveryKey()
+        } catch {
+            message = error.localizedDescription
+            return
+        }
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "Recall Recovery Key.txt"
+        panel.allowedContentTypes = [.plainText]
+        panel.message = "Anyone with this file and a copy of your Recall library can view your screenshots."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try Data(text.utf8).write(to: url, options: .atomic)
+            // Owner read/write only.
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            message = "Recovery key saved."
+        } catch {
+            message = error.localizedDescription
+        }
+    }
+
+    private func importKey() {
+        guard let vault = state.store?.vault else { return }
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.plainText]
+        panel.message = "Choose a Recall recovery key."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let added = try vault.importRecoveryKey(String(contentsOf: url, encoding: .utf8))
+            message = added == 0 ? "This Mac already has that key." : "Imported \(added) key\(added == 1 ? "" : "s"). Locked screenshots can be opened again."
+            ImageCache.shared.removeAll()
+            state.historyChanged()
+            state.encryptStoredImages()
+        } catch {
+            message = error.localizedDescription
+        }
     }
 }

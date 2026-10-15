@@ -46,4 +46,48 @@ public enum Keychain {
     }
 
     public static func has(_ account: Account) -> Bool { !(get(account) ?? "").isEmpty }
+
+    // MARK: Keys that must survive errors
+
+    public struct Failure: Error, LocalizedError {
+        public let status: OSStatus
+        public var errorDescription: String? {
+            let message = SecCopyErrorMessageString(status, nil) as String? ?? "error \(status)"
+            return "The keychain couldn't be read: \(message)"
+        }
+    }
+
+    /// Returns nil only when the item doesn't exist. Any other failure (a locked keychain, a denied
+    /// prompt) throws, so callers never mistake an unreadable key for a missing one and replace it.
+    static func data(account: String) throws -> Data? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess, let data = item as? Data else { throw Failure(status: status) }
+        return data
+    }
+
+    /// Updates in place (never delete-then-add, which could lose the item between the two calls).
+    static func setData(_ data: Data, account: String) throws {
+        let base: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+        ]
+        let status = SecItemUpdate(base as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        if status == errSecSuccess { return }
+        guard status == errSecItemNotFound else { throw Failure(status: status) }
+        var item = base
+        item[kSecValueData as String] = data
+        item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        let added = SecItemAdd(item as CFDictionary, nil)
+        guard added == errSecSuccess else { throw Failure(status: added) }
+    }
 }

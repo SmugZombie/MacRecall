@@ -217,8 +217,8 @@ public actor CaptureCoordinator {
         let imageData = try ImageProcessing.encode(finalImage, format: settings.imageFormat, quality: settings.compressionQuality)
         let thumb = ImageProcessing.resize(finalImage, maxWidth: 480, maxHeight: 300)
         let thumbData = try ImageProcessing.encode(thumb, format: .jpeg, quality: 0.7)
-        try ImageProcessing.writeAtomically(imageData, to: store.paths.absolute(imageRel))
-        try ImageProcessing.writeAtomically(thumbData, to: store.paths.absolute(thumbRel))
+        try store.vault.write(imageData, to: imageRel)
+        try store.vault.write(thumbData, to: thumbRel)
 
         let metadata: [String: String] = [
             "match": window.matchMethod,
