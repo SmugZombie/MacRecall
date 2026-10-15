@@ -41,6 +41,10 @@ import Testing
         #expect(result["protocolVersion"] as? String == "2025-03-26")
         #expect((result["serverInfo"] as? [String: Any])?["version"] as? String == "1.2.0")
         #expect((result["instructions"] as? String)?.contains("America/Phoenix") == true)
+        // Agents once concluded Recall keeps no screenshots; the instructions must say it does, and that they stay local.
+        let instructions = try #require(result["instructions"] as? String)
+        #expect(instructions.contains("takes a screenshot"))
+        #expect(instructions.contains("Don't say Recall has no screenshots"))
 
         // Notifications get no reply.
         #expect(try await call(server, ["jsonrpc": "2.0", "method": "notifications/initialized"]) == nil)
@@ -138,6 +142,7 @@ import Testing
         #expect(full.text.contains("Running a deploy script."))
         #expect(full.text.contains("DONE"))
         #expect(full.text.contains("Wed 2026-10-14 10:00"))
+        #expect(full.text.contains("Screenshot: 100×100, stored encrypted in Recall"))
 
         let clipped = try await callTool(server, "get_capture", ["id": c.id, "max_chars": 200])
         #expect(!clipped.text.contains("DONE"))
