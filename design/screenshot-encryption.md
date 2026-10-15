@@ -1,7 +1,7 @@
 # Proposal: encrypt screenshots so only Recall can read them
 
-**Status:** step 1 (screenshot and thumbnail encryption, migration, recovery keys) is implemented on the
-`screenshot-encryption` branch. Database encryption and Touch ID are not started.
+**Status:** step 1 (screenshot and thumbnail encryption, migration, recovery keys) shipped in 1.1.0.
+Database encryption is deferred and tracked in [TODO.md](../TODO.md). Touch ID is not started.
 
 ## Problem
 
