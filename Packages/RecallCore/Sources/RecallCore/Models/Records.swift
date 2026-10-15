@@ -222,5 +222,50 @@ public struct StorageStats: Sendable {
     public var databaseBytes: Int64
     public var imageBytes: Int64
     public var oldestCapture: Date?
-    public var totalBytes: Int64 { databaseBytes + imageBytes }
+    public var noteCount: Int = 0
+    public var attachmentBytes: Int64 = 0
+    public var totalBytes: Int64 { databaseBytes + imageBytes + attachmentBytes }
+}
+
+/// A note the user wrote, stamped with the time it was saved.
+public struct NoteRecord: Sendable, Identifiable, Hashable {
+    public let id: Int64
+    public var createdAt: Date
+    public var updatedAt: Date
+    public var timezone: String
+    public var text: String
+    public var projectID: Int64?
+    public var projectName: String?
+    public var attachments: [NoteAttachment]
+
+    /// The first line, for lists.
+    public var title: String {
+        let first = text.split(whereSeparator: \.isNewline).first.map(String.init)?.trimmingCharacters(in: .whitespaces) ?? ""
+        if !first.isEmpty { return first }
+        return attachments.first?.fileName ?? "Note"
+    }
+}
+
+/// A copy of a file attached to a note, stored encrypted in the library.
+public struct NoteAttachment: Sendable, Identifiable, Hashable {
+    public let id: Int64
+    public var noteID: Int64
+    public var fileName: String
+    /// Relative to the library's data folder; read it through `RecallStore.attachmentData(_:)`.
+    public var path: String
+    /// Uniform type identifier, e.g. "public.png".
+    public var contentType: String
+    public var byteCount: Int64
+    public var isImage: Bool
+}
+
+/// A file to attach: its name and contents at the moment it was attached.
+public struct NewNoteAttachment: Sendable, Hashable {
+    public var fileName: String
+    public var data: Data
+
+    public init(fileName: String, data: Data) {
+        self.fileName = fileName
+        self.data = data
+    }
 }

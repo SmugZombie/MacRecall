@@ -3,7 +3,7 @@ import SwiftUI
 
 enum SidebarSection: Hashable {
     case today, yesterday, thisWeek, calendar
-    case search, projects, summaries, queue
+    case search, notes, projects, summaries, queue
 }
 
 struct MainView: View {
@@ -23,6 +23,7 @@ struct MainView: View {
                 }
                 Section("Explore") {
                     Label("Search", systemImage: "magnifyingglass").tag(SidebarSection.search)
+                    Label("Notes", systemImage: "note.text").tag(SidebarSection.notes)
                     Label("Projects", systemImage: "folder").tag(SidebarSection.projects)
                     Label("Daily Summaries", systemImage: "doc.text").tag(SidebarSection.summaries)
                 }
@@ -86,6 +87,7 @@ struct MainView: View {
             TimelineView(title: calendarDate.formatted(date: .complete, time: .omitted),
                          range: DateInterval(start: day, end: cal.date(byAdding: .day, value: 1, to: day)!))
         case .search: SearchView()
+        case .notes: NotesView()
         case .projects: ProjectsView()
         case .summaries: SummariesView()
         case .queue: QueueView()

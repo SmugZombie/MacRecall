@@ -31,7 +31,18 @@ struct RecallApp: App {
                 // ⌃⌥⌘P is registered globally (GlobalHotKey), so it isn't bound here as well.
                 Button(state.recordingState == .recording ? "Pause Recording" : "Resume Recording") { state.toggleRecording() }
             }
+            CommandGroup(after: .newItem) {
+                // ⌃⌥⌘N is registered globally (GlobalHotKey).
+                Button("New Note…") { state.newNote() }
+            }
         }
+
+        Window("New Note", id: WindowID.note) {
+            NoteWindow()
+                .environmentObject(state)
+        }
+        .windowResizability(.contentSize)
+        .defaultPosition(.center)
 
         Window("Software Update", id: WindowID.update) {
             UpdateView()
@@ -75,6 +86,13 @@ private struct MenuBarLabel: View {
                     updates.showUpdateWindow = false
                 }
             }
+            .onChange(of: state.showNoteWindow) {
+                if state.showNoteWindow {
+                    activateApp()
+                    openWindow(id: WindowID.note)
+                    state.showNoteWindow = false
+                }
+            }
     }
 }
 
@@ -82,6 +100,7 @@ enum WindowID {
     static let main = "main"
     static let onboarding = "onboarding"
     static let update = "update"
+    static let note = "note"
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {

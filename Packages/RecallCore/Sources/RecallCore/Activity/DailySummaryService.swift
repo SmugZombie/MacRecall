@@ -40,6 +40,8 @@ public struct DailySummaryService: Sendable {
         public var sessions: [SessionRecord] = []
         public var issues: [(String, Int64)] = []
         public var captureCount = 0
+        /// Notes the user wrote that day, oldest first.
+        public var notes: [NoteRecord] = []
     }
 
     public func facts(for key: Int64) throws -> Facts {
@@ -47,6 +49,7 @@ public struct DailySummaryService: Sendable {
         var facts = Facts()
         let credit = settings().captureInterval
         facts.sessions = try store.sessions(from: start, to: end, ascending: true, limit: 1000)
+        facts.notes = try store.notes(from: start, to: end, ascending: true, limit: 500)
 
         var appIntervals: [String: [(start: Date, lastSeen: Date)]] = [:]
         var allIntervals: [(start: Date, lastSeen: Date)] = []
@@ -92,10 +95,25 @@ public struct DailySummaryService: Sendable {
 
     public func markdown(for key: Int64, facts: Facts, narrative: String?) -> String {
         var md = "# Daily summary — \(Self.localDateString(key))\n\n"
-        if facts.captureCount == 0 { return md + "_No activity was captured on this day._\n" }
+        if facts.captureCount == 0 && facts.notes.isEmpty { return md + "_No activity was captured on this day._\n" }
         if let narrative, !narrative.isEmpty {
             md += "## Overview _(AI-generated from the facts below)_\n\n\(narrative)\n\n"
         }
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        if !facts.notes.isEmpty {
+            md += "## Notes _(written by the user)_\n\n"
+            for note in facts.notes {
+                let lines = note.text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+                md += "- \(f.string(from: note.createdAt)) \(lines.first ?? "")"
+                if let project = note.projectName { md += " · \(project)" }
+                md += " [note \(note.id)]\n"
+                for line in lines.dropFirst() { md += "  \(line)\n" }
+                if !note.attachments.isEmpty { md += "  Attached: \(note.attachments.map(\.fileName).joined(separator: ", "))\n" }
+            }
+            md += "\n"
+        }
+        if facts.captureCount == 0 { return md + "_No screen activity was captured on this day._\n" }
         md += "## Time\n\n"
         md += "- Estimated active time: **\(Self.duration(facts.estimatedSeconds))** (sampled every \(Int(settings().captureInterval))s; gaps over the idle timeout excluded)\n"
         md += "- Directly observed (unchanged screens seen repeatedly): \(Self.duration(facts.observedSeconds))\n"
@@ -109,8 +127,6 @@ public struct DailySummaryService: Sendable {
         md += "## Applications\n\n"
         for (name, secs) in facts.byApp.prefix(10) { md += "- \(name): \(Self.duration(secs))\n" }
         md += "\n## Activity\n\n"
-        let f = DateFormatter()
-        f.dateFormat = "HH:mm"
         for s in facts.sessions {
             let project = s.projectName.map { " · \($0)" } ?? ""
             md += "- \(f.string(from: s.startedAt))–\(f.string(from: s.endedAt)) **\(s.title)**\(project) [session \(s.id)]\n"
@@ -128,7 +144,7 @@ public struct DailySummaryService: Sendable {
         let facts = try facts(for: key)
         var narrative: String?
         let s = settings()
-        if let ai, !s.summaryModel.isEmpty, facts.captureCount > 0 {
+        if let ai, !s.summaryModel.isEmpty, facts.captureCount > 0 || !facts.notes.isEmpty {
             let factsText = markdown(for: key, facts: facts, narrative: nil)
             let redacted = s.redactionEnabled ? s.sensitiveRules.redact(factsText) : factsText
             narrative = try await ai.chat(model: s.summaryModel, messages: [

@@ -16,10 +16,18 @@ public struct SessionHit: Sendable, Identifiable, Hashable {
     public var score: Double
 }
 
+public struct NoteHit: Sendable, Identifiable, Hashable {
+    public var id: Int64 { note.id }
+    public var note: NoteRecord
+    public var snippet: String
+}
+
 public struct SearchResults: Sendable {
     public var interpretation: QueryInterpretation
     public var captures: [CaptureHit]
     public var sessions: [SessionHit]
+    /// Notes the user wrote, most relevant first. Keyword matches only.
+    public var notes: [NoteHit] = []
     public var semanticUsed: Bool
     /// Filters that were relaxed because they produced no results.
     public var relaxedFilters: [String]
@@ -117,7 +125,23 @@ public struct HybridSearch: Sendable {
             return SessionHit(session: s, snippet: entry.value.1.isEmpty ? s.summary : entry.value.1, score: entry.value.0)
         }
 
-        return SearchResults(interpretation: interpretation, captures: captureHits, sessions: sessionHits,
+        // Notes: keyword matches, or every note in the period for a time-only query. Notes have no app, so only an
+        // explicit app filter excludes them; an app named in the query ("the slack integration") doesn't.
+        let noteScope = SearchScope(range: scope.range, applicationNames: applicationNames ?? [], projectID: projectID)
+        var noteIDs = try keyword.searchNotes(text, mode: exact ? .all : .any, scope: noteScope, limit: 20)
+        var snippets = Dictionary(noteIDs.map { ($0.entityID, $0.snippet) }, uniquingKeysWith: { a, _ in a })
+        if noteIDs.isEmpty && interpretation.keywords.isEmpty && interpretation.quotedPhrases.isEmpty && scope.applicationNames.isEmpty,
+           let range = scope.range {
+            noteIDs = try store.notes(from: range.start, to: range.end, projectID: projectID, limit: 20)
+                .map { KeywordHit(entityType: "note", entityID: $0.id, snippet: "", rank: 0) }
+            snippets = [:]
+        }
+        var noteHits = try store.notes(ids: noteIDs.map(\.entityID)).map {
+            NoteHit(note: $0, snippet: snippets[$0.id].flatMap { $0.isEmpty ? nil : $0 } ?? $0.text.clipped(200))
+        }
+        if interpretation.wantsLatest { noteHits.sort { $0.note.createdAt > $1.note.createdAt } }
+
+        return SearchResults(interpretation: interpretation, captures: captureHits, sessions: sessionHits, notes: noteHits,
                              semanticUsed: !vecHits.isEmpty, relaxedFilters: relaxed)
     }
 

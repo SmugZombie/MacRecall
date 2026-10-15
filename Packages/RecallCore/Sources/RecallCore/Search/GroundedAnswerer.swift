@@ -4,6 +4,7 @@ public struct GroundedAnswer: Sendable {
     public enum Citation: Sendable, Hashable {
         case capture(Int64)
         case session(Int64)
+        case note(Int64)
     }
 
     public var text: String
@@ -36,12 +37,19 @@ public struct GroundedAnswerer: Sendable {
     public func answer(question: String, results: SearchResults) async throws -> GroundedAnswer {
         let captures = Array(results.captures.prefix(14))
         let sessions = Array(results.sessions.prefix(6))
-        guard !captures.isEmpty || !sessions.isEmpty else {
+        let notes = Array(results.notes.prefix(8))
+        guard !captures.isEmpty || !sessions.isEmpty || !notes.isEmpty else {
             return GroundedAnswer(text: Self.insufficient, citations: [], sufficientEvidence: false)
         }
         let f = DateFormatter()
         f.dateFormat = "EEE yyyy-MM-dd HH:mm"
         var evidence: [String] = []
+        for n in notes {
+            let files = n.note.attachments.map(\.fileName)
+            evidence.append("[N\(n.note.id)] \(f.string(from: n.note.createdAt)) note written by the user: \(n.note.text.clipped(600))"
+                + (files.isEmpty ? "" : " (attached: \(files.joined(separator: ", ")))")
+                + (n.note.projectName.map { " (project: \($0))" } ?? ""))
+        }
         for s in sessions {
             evidence.append("[S\(s.session.id)] \(f.string(from: s.session.startedAt))–\(f.string(from: s.session.endedAt)) session “\(s.session.title)”"
                 + (s.session.summary.isEmpty ? "" : ": \(s.session.summary.clipped(300))")
@@ -60,31 +68,32 @@ public struct GroundedAnswerer: Sendable {
             ChatMessage(role: "system", content: """
                 You answer questions about the user's own computer activity history using ONLY the evidence records given.
                 \(Prompts.groundingRules)
-                - Cite every factual statement with record ids in square brackets, e.g. [C12] or [S3].
+                - Cite every factual statement with record ids in square brackets, e.g. [C12], [S3] or [N4].
                 - If the evidence does not answer the question, reply exactly: INSUFFICIENT_EVIDENCE
                 - Be brief: at most 4 sentences. Current time: \(now).
                 """),
             ChatMessage(role: "user", content: "Evidence:\n\(evidenceText)\n\nQuestion: \(question)"),
         ], temperature: 0)
 
-        return Self.validate(raw, captureIDs: Set(captures.map(\.capture.id)), sessionIDs: Set(sessions.map(\.session.id)))
+        return Self.validate(raw, captureIDs: Set(captures.map(\.capture.id)), sessionIDs: Set(sessions.map(\.session.id)),
+                             noteIDs: Set(notes.map(\.note.id)))
     }
 
-    static func validate(_ raw: String, captureIDs: Set<Int64>, sessionIDs: Set<Int64>) -> GroundedAnswer {
+    static func validate(_ raw: String, captureIDs: Set<Int64>, sessionIDs: Set<Int64>, noteIDs: Set<Int64> = []) -> GroundedAnswer {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty || trimmed.contains("INSUFFICIENT_EVIDENCE") {
             return GroundedAnswer(text: insufficient, citations: [], sufficientEvidence: false)
         }
         var citations: [GroundedAnswer.Citation] = []
         var text = trimmed
-        let regex = try! NSRegularExpression(pattern: #"\[([CS])(\d+)\]"#)
+        let regex = try! NSRegularExpression(pattern: #"\[([CSN])(\d+)\]"#)
         let ns = trimmed as NSString
         for m in regex.matches(in: trimmed, range: NSRange(location: 0, length: ns.length)).reversed() {
             let kind = ns.substring(with: m.range(at: 1))
             let id = Int64(ns.substring(with: m.range(at: 2))) ?? -1
-            let valid = kind == "C" ? captureIDs.contains(id) : sessionIDs.contains(id)
+            let c: GroundedAnswer.Citation = kind == "C" ? .capture(id) : kind == "S" ? .session(id) : .note(id)
+            let valid = kind == "C" ? captureIDs.contains(id) : kind == "S" ? sessionIDs.contains(id) : noteIDs.contains(id)
             if valid {
-                let c: GroundedAnswer.Citation = kind == "C" ? .capture(id) : .session(id)
                 if !citations.contains(c) { citations.insert(c, at: 0) }
             } else if let r = Range(m.range, in: text) {
                 // A citation to a record we never supplied is fabricated: remove it.

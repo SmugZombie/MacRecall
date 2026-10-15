@@ -19,13 +19,17 @@ struct TimelineView: View {
     @State private var renaming: SessionRecord?
     @State private var editingSummary: SessionRecord?
     @State private var projects: [ProjectRecord] = []
+    @State private var notes: [NoteRecord] = []
+    @State private var selectedNoteID: Int64?
+    @State private var editingNote: NoteRecord?
+    @State private var deletingNote: NoteRecord?
     private let pageSize = 60
 
     var body: some View {
         VStack(spacing: 0) {
             header
             Divider()
-            if sessions.isEmpty {
+            if sessions.isEmpty && notes.isEmpty {
                 ContentUnavailableView("No activity", systemImage: "clock",
                                        description: Text(state.recordingState == .recording
                                                          ? "Captures appear here as you work. Sessions are grouped about a minute after capture."
@@ -35,11 +39,27 @@ struct TimelineView: View {
             }
         }
         .navigationTitle(title)
-        .inspector(isPresented: Binding(get: { selectedCaptureID != nil }, set: { if !$0 { selectedCaptureID = nil } })) {
-            if let id = selectedCaptureID {
+        .inspector(isPresented: Binding(get: { selectedCaptureID != nil || selectedNoteID != nil },
+                                        set: { if !$0 { selectedCaptureID = nil; selectedNoteID = nil } })) {
+            if let id = selectedNoteID {
+                NoteDetailView(noteID: id, onClose: { selectedNoteID = nil })
+                    .inspectorColumnWidth(min: 380, ideal: 520, max: 900)
+            } else if let id = selectedCaptureID {
                 CaptureDetailView(captureID: id, onClose: { selectedCaptureID = nil }, onSelect: { selectedCaptureID = $0 })
                     .inspectorColumnWidth(min: 380, ideal: 520, max: 900)
             }
+        }
+        .onChange(of: selectedCaptureID) { if selectedCaptureID != nil { selectedNoteID = nil } }
+        .onChange(of: selectedNoteID) { if selectedNoteID != nil { selectedCaptureID = nil } }
+        .sheet(item: $editingNote) { EditNoteSheet(note: $0) }
+        .confirmationDialog("Delete this note?", isPresented: Binding(get: { deletingNote != nil }, set: { if !$0 { deletingNote = nil } }),
+                            presenting: deletingNote) { note in
+            Button("Delete Note", role: .destructive) {
+                if selectedNoteID == note.id { selectedNoteID = nil }
+                state.deleteNote(id: note.id)
+            }
+        } message: { _ in
+            Text("The note and its attached files will be permanently removed from Recall.")
         }
         .task(id: TaskKey(range: range, revision: state.revision, app: appFilter, project: projectID)) { await reload() }
         .onChange(of: nav.captureID) { consumeRequestedCapture() }
@@ -72,8 +92,10 @@ struct TimelineView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 let total = sessions.reduce(0) { $0 + $1.activeSeconds }
-                Text("\(sessions.count) sessions · \(formatDuration(total)) active").foregroundStyle(.secondary)
+                Text("\(sessions.count) sessions · \(formatDuration(total)) active" + (notes.isEmpty ? "" : " · \(notes.count) note\(notes.count == 1 ? "" : "s")"))
+                    .foregroundStyle(.secondary)
                 Spacer()
+                Button { state.newNote() } label: { Image(systemName: "square.and.pencil") }.help("New note (\(GlobalHotKey.newNoteDisplayString))")
                 Picker("Application", selection: $appFilter) {
                     Text("All applications").tag(String?.none)
                     ForEach(applications) { app in Text(app.name).tag(Optional(app.bundleIdentifier)) }
@@ -105,17 +127,54 @@ struct TimelineView: View {
 
     // MARK: Session list
 
+    private enum Item: Identifiable {
+        case session(SessionRecord)
+        case note(NoteRecord)
+
+        var id: String {
+            switch self {
+            case .session(let s): return "s\(s.id)"
+            case .note(let n): return "n\(n.id)"
+            }
+        }
+
+        var date: Date {
+            switch self {
+            case .session(let s): return s.startedAt
+            case .note(let n): return n.createdAt
+            }
+        }
+    }
+
+    /// Sessions and notes, newest first. While older sessions are still to load, notes older than the
+    /// loaded ones wait too, so they appear in order.
+    private var items: [Item] {
+        let cutoff = hasMore ? sessions.last?.startedAt : nil
+        let shown = notes.filter { cutoff == nil || $0.createdAt >= cutoff! }
+        return (sessions.map(Item.session) + shown.map(Item.note)).sorted { $0.date > $1.date }
+    }
+
     private var list: some View {
         List {
-            ForEach(sessions) { session in
-                SessionRow(session: session, expanded: expanded.contains(session.id), selectedCaptureID: $selectedCaptureID,
-                           appFilter: appFilter)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        if expanded.contains(session.id) { expanded.remove(session.id) } else { expanded.insert(session.id) }
-                    }
-                    .contextMenu { sessionMenu(session) }
-                    .onAppear { if session.id == sessions.last?.id && hasMore { Task { await loadMore() } } }
+            ForEach(items) { item in
+                switch item {
+                case .session(let session):
+                    SessionRow(session: session, expanded: expanded.contains(session.id), selectedCaptureID: $selectedCaptureID,
+                               appFilter: appFilter)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            if expanded.contains(session.id) { expanded.remove(session.id) } else { expanded.insert(session.id) }
+                        }
+                        .contextMenu { sessionMenu(session) }
+                        .onAppear { if session.id == sessions.last?.id && hasMore { Task { await loadMore() } } }
+                case .note(let note):
+                    NoteRow(note: note, selected: selectedNoteID == note.id, showDate: range.duration > 90_000)
+                        .contentShape(Rectangle())
+                        .onTapGesture { selectedNoteID = note.id }
+                        .contextMenu {
+                            NoteMenu(note: note, projects: projects, onEdit: { editingNote = note }, onDelete: { deletingNote = note })
+                        }
+                }
             }
         }
         .listStyle(.inset)
@@ -164,6 +223,8 @@ struct TimelineView: View {
         let page = (try? store.sessions(from: range.start, to: range.end, projectID: projectID, limit: pageSize)) ?? []
         sessions = filter(page)
         hasMore = page.count == pageSize
+        // Notes belong to no application, so an application filter hides them.
+        notes = appFilter == nil ? ((try? store.notes(from: range.start, to: range.end, projectID: projectID, limit: 2000)) ?? []) : []
         marks = ((try? store.captureMarks(from: range.start, to: range.end)) ?? []).filter { mark in
             guard let appFilter else { return true }
             return applications.first { $0.bundleIdentifier == appFilter }?.name == mark.applicationName

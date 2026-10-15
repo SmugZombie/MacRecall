@@ -106,6 +106,8 @@ private struct PrivacySettings: View {
             Section("Retention") {
                 Stepper("Keep screenshots for \(state.settings.retentionDays) days", value: $state.settings.retentionDays, in: 1...3650)
                 Toggle("Delete older history automatically", isOn: $state.settings.automaticCleanup)
+                Text("Notes you write are kept until you delete them, or delete all history below.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             ScreenshotEncryptionSection()
             MCPAccessSection()
@@ -169,7 +171,7 @@ private struct PrivacySettings: View {
                 state.historyChanged()
             }
         } message: {
-            Text("All screenshots, recognized text, sessions and summaries will be permanently removed. Projects are kept.")
+            Text("All screenshots, recognized text, sessions, summaries and notes (with their attachments) will be permanently removed. Projects are kept.")
         }
     }
 
@@ -470,6 +472,8 @@ private struct StorageSettings: View {
                 LabeledContent("Total disk usage", value: ByteCountFormatter.string(fromByteCount: stats.totalBytes, countStyle: .file))
                 LabeledContent("Screenshots", value: "\(stats.captureCount)")
                 LabeledContent("Images", value: ByteCountFormatter.string(fromByteCount: stats.imageBytes, countStyle: .file))
+                LabeledContent("Notes", value: "\(stats.noteCount)")
+                LabeledContent("Note attachments", value: ByteCountFormatter.string(fromByteCount: stats.attachmentBytes, countStyle: .file))
                 LabeledContent("Database", value: ByteCountFormatter.string(fromByteCount: stats.databaseBytes, countStyle: .file))
                 LabeledContent("Oldest screenshot", value: stats.oldestCapture?.formatted(date: .abbreviated, time: .shortened) ?? "—")
             } else {

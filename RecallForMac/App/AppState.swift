@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 import Combine
 import Foundation
 import RecallCore
@@ -64,9 +65,16 @@ final class AppState: ObservableObject {
     @Published private(set) var encryptingImages = false
     private var imageEncryptionRunning = false
     @Published var launchAtLogin = SMAppService.mainApp.status == .enabled
+    /// The note being written, shared by the menu bar and the New Note window so neither loses it.
+    @Published var noteDraft = NoteDraft()
+    /// Asks the always-alive menu bar label to open the New Note window.
+    @Published var showNoteWindow = false
+    /// Asks the New Note window to show the file picker when it opens.
+    @Published var noteWindowImporting = false
 
     private var timers: [Timer] = []
     private var hotKey: GlobalHotKey?
+    private var noteHotKey: GlobalHotKey?
 
     private init() {
         let settings = RecallSettings.load()
@@ -139,9 +147,12 @@ final class AppState: ObservableObject {
         scheduleYesterdaySummary()
 
         hotKey = GlobalHotKey { [weak self] in self?.toggleRecording() }
+        noteHotKey = GlobalHotKey(keyCode: kVK_ANSI_N, id: 2) { [weak self] in self?.newNote() }
+        AttachmentFiles.cleanUp()
     }
 
     func shutdown() {
+        AttachmentFiles.cleanUp()
         timers.forEach { $0.invalidate() }
         monitor.stop()
         let coordinator = coordinator, queue = queue
@@ -271,6 +282,37 @@ final class AppState: ObservableObject {
 
     func captureNow() {
         Task { await coordinator?.captureNow(trigger: .manual) }
+    }
+
+    // MARK: Notes
+
+    func newNote(attach: Bool = false) {
+        noteWindowImporting = attach
+        showNoteWindow = true
+    }
+
+    /// Saves `draft` as a new note stamped now, or as changes to `note`. Encrypting attachments runs off the main thread.
+    func saveNote(_ draft: NoteDraft, editing note: NoteRecord? = nil) async throws {
+        guard let store else { throw NoteError.notFound }
+        let added = draft.attachments.compactMap(\.newAttachment)
+        let text = draft.text, projectID = draft.projectID
+        if let note {
+            let kept = Set(draft.attachments.compactMap(\.existing?.id))
+            let removed = Set(note.attachments.map(\.id)).subtracting(kept)
+            try await Task.detached(priority: .userInitiated) {
+                _ = try store.updateNote(id: note.id, text: text, projectID: projectID, adding: added, removing: removed)
+            }.value
+        } else {
+            try await Task.detached(priority: .userInitiated) {
+                _ = try store.addNote(text: text, projectID: projectID, attachments: added)
+            }.value
+        }
+        historyChanged()
+    }
+
+    func deleteNote(id: Int64) {
+        try? store?.deleteNote(id: id)
+        historyChanged()
     }
 
     // MARK: Permissions

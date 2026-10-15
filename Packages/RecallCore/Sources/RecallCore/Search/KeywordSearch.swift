@@ -20,7 +20,7 @@ public struct SearchScope: Sendable, Equatable {
     }
 }
 
-/// SQLite FTS5 search over captures and sessions.
+/// SQLite FTS5 search over captures, sessions and notes.
 public struct KeywordSearch: Sendable {
     public enum Mode: Sendable { case all, any }
 
@@ -100,6 +100,30 @@ public struct KeywordSearch: Sendable {
         params.append(limit)
         return try store.db.query(sql, params).map {
             KeywordHit(entityType: "session", entityID: $0.int("id")!, snippet: $0.string("snip") ?? "", rank: $0.double("score") ?? 0)
+        }
+    }
+
+    /// Notes have no application, so a scope limited to applications matches none.
+    public func searchNotes(_ text: String, mode: Mode = .all, scope: SearchScope = SearchScope(), limit: Int = 30) throws -> [KeywordHit] {
+        guard let fts = Self.ftsQuery(text, mode: mode), scope.applicationNames.isEmpty else { return [] }
+        var sql = """
+            SELECT n.id, snippet(note_fts, -1, '«', '»', '…', 24) AS snip, bm25(note_fts, 4.0, 2.0, 2.0) AS score
+            FROM note_fts JOIN notes n ON n.id = note_fts.rowid
+            WHERE note_fts MATCH ?
+            """
+        var params: [SQLBindable] = [fts]
+        if let range = scope.range {
+            sql += " AND n.created_at >= ? AND n.created_at < ?"
+            params += [range.start, range.end]
+        }
+        if let projectID = scope.projectID {
+            sql += " AND n.project_id = ?"
+            params.append(projectID)
+        }
+        sql += " ORDER BY score LIMIT ?"
+        params.append(limit)
+        return try store.db.query(sql, params).map {
+            KeywordHit(entityType: "note", entityID: $0.int("id")!, snippet: $0.string("snip") ?? "", rank: $0.double("score") ?? 0)
         }
     }
 

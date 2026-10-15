@@ -10,6 +10,8 @@ public struct StoragePaths: Sendable {
     public var database: URL { data.appendingPathComponent("recall.sqlite") }
     public var screenshots: URL { data.appendingPathComponent("screenshots", isDirectory: true) }
     public var thumbnails: URL { data.appendingPathComponent("thumbnails", isDirectory: true) }
+    /// Files attached to notes, encrypted like screenshots.
+    public var attachments: URL { data.appendingPathComponent("attachments", isDirectory: true) }
     public var logs: URL { root.appendingPathComponent("logs", isDirectory: true) }
     public var exports: URL { root.appendingPathComponent("exports", isDirectory: true) }
 
@@ -22,7 +24,7 @@ public struct StoragePaths: Sendable {
 
     public func createDirectories() throws {
         try migrateLegacyLayout()
-        for dir in [root, data, screenshots, thumbnails, logs, exports] {
+        for dir in [root, data, screenshots, thumbnails, attachments, logs, exports] {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         }
         // Belt and braces alongside the .noindex name.

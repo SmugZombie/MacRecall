@@ -20,11 +20,14 @@ struct MenuBarView: View {
             Divider()
             recordingControls
             Divider()
+            QuickNoteView { attach in state.newNote(attach: attach) }
+            Divider()
             aiStatus
             Divider()
             HStack {
                 Button { open(WindowID.main) } label: { Label("Timeline", systemImage: "clock") }
                 Button { NavigationRequest.shared.section = .search; open(WindowID.main) } label: { Label("Search", systemImage: "magnifyingglass") }
+                Button { NavigationRequest.shared.section = .notes; open(WindowID.main) } label: { Label("Notes", systemImage: "note.text") }
                 Spacer()
                 Button { activateApp(); openSettings() } label: { Image(systemName: "gearshape") }.help("Settings")
                 Button { NSApp.terminate(nil) } label: { Image(systemName: "power") }.help("Quit Recall")

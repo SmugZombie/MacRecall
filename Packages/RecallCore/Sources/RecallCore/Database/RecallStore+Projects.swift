@@ -42,6 +42,7 @@ extension RecallStore {
         try db.transaction {
             try db.run("UPDATE sessions SET project_id = ? WHERE project_id = ?", [target, source])
             try db.run("UPDATE captures SET project_id = ? WHERE project_id = ?", [target, source])
+            try db.run("UPDATE notes SET project_id = ? WHERE project_id = ?", [target, source])
             if let s = try project(id: source), var t = try project(id: target) {
                 t.rules.keywords = Array(Set(t.rules.keywords + s.rules.keywords)).sorted()
                 t.rules.aliases = Array(Set(t.rules.aliases + s.rules.aliases + [s.name])).sorted()
@@ -60,6 +61,7 @@ extension RecallStore {
             // Clear references explicitly (rather than relying on ON DELETE SET NULL) so FTS triggers fire.
             try db.run("UPDATE sessions SET project_id = NULL, project_source = 'none' WHERE project_id = ?", [id])
             try db.run("UPDATE captures SET project_id = NULL WHERE project_id = ?", [id])
+            try db.run("UPDATE notes SET project_id = NULL WHERE project_id = ?", [id])
             try db.run("DELETE FROM projects WHERE id = ?", [id])
         }
     }
@@ -68,6 +70,7 @@ extension RecallStore {
     func reindexProject(_ id: Int64) throws {
         try db.run("UPDATE captures SET project_id = project_id WHERE project_id = ?", [id])
         try db.run("UPDATE sessions SET project_id = project_id WHERE project_id = ?", [id])
+        try db.run("UPDATE notes SET project_id = project_id WHERE project_id = ?", [id])
     }
 
     // MARK: Suggestions

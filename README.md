@@ -45,6 +45,14 @@ Choose a provider in **Settings → AI**, then pick three models: **vision** (de
 - Recall never downloads models itself.
 - If the provider is offline or rejects credentials, AI jobs wait in the durable queue without using up retries. Capture, OCR, the timeline and keyword search keep working.
 
+### Notes
+
+Write a note from the menu bar ("Completed work on the importer", "Took lunch from 12 to 1"), press **⌘↩**, and it's saved with the current time. **⌃⌥⌘N** opens the New Note window from anywhere, where you can also attach files: choose them, drop them on the note, or paste a copied file or image. The paperclip in the menu bar opens the same window.
+
+- Notes appear in the timeline between sessions, in the **Notes** list, in search (and as `[N<id>]` sources for Ask), and in daily summaries, where they also feed the AI overview.
+- Attached files are copied into the library as they were when attached, and encrypted like screenshots (up to 100 MB each). **Open** decrypts a copy into a private temporary folder that Recall empties when it starts and quits; **Save As…** exports one.
+- Retention never deletes notes. Delete them individually, or with **Delete All History**.
+
 ### Screenshot encryption
 
 Screenshots and thumbnails are encrypted on disk with AES-GCM (CryptoKit), so other apps can't read them from `Application Support`. The key is created on first launch and kept in the login keychain, which hands it to Recall without asking and prompts for any other app. Each file is bound to its path in the library, and decrypted images only exist in memory. To give another app a copy, use **Export Screenshot…** in a screenshot's detail view.
@@ -73,14 +81,16 @@ The agent starts the app binary with `--mcp`. That process only opens the librar
 
 | Tool | What it returns |
 |---|---|
-| `search_history` | Keyword search over on-screen text, window titles, apps, AI descriptions and sessions, with date (`from`/`to` or `when: "yesterday morning"`), app and project filters |
+| `search_history` | Keyword search over on-screen text, window titles, apps, AI descriptions, sessions and notes, with date (`from`/`to` or `when: "yesterday morning"`), app and project filters |
 | `get_capture` | One capture's time, app, window, project, session, AI description and full recognized text |
 | `get_screenshot` | A capture's screenshot as an image (full size up to 2560 px, or the thumbnail), only if you've allowed it |
 | `get_session` | A session's title, summary, active time, apps and captures |
 | `list_sessions` | Sessions in a time range (default today) |
 | `usage_report` | Active time by app, project, window or day |
-| `daily_summary` | The day's time, projects, apps, sessions and errors seen on screen |
+| `daily_summary` | The day's notes, time, projects, apps, sessions and errors seen on screen |
 | `list_projects` | Projects with aliases, repositories and recent time |
+| `list_notes` | Your notes in a time range (default the last 7 days), optionally matching a query or project |
+| `get_note` | One note's full text, time, project and attachment names; attachment contents aren't shared |
 
 - **Screenshots need a second opt-in.** Agents get text only until you also turn on **Allow agents to view screenshots**, which is off by default. Images can show more than the redacted text, such as photos, other people's messages and anything OCR missed. The `--mcp` process decrypts screenshots in memory with the same keychain key as the app.
 - Whatever the agent reads goes to its model, so it leaves your Mac if the agent uses a cloud model. Redaction applies to both, because sensitive text is removed (and blacked out in screenshots) before anything is stored.
@@ -105,7 +115,7 @@ Self-update is disabled for development builds (DerivedData), unsigned or ad hoc
 RecallForMac.xcodeproj
 RecallForMac/                 SwiftUI app target (thin)
   App/                        RecallApp (MenuBarExtra + windows), AppState, global hot key
-  UI/                         Timeline, Search, Projects, Summaries, Queue, Settings, Onboarding
+  UI/                         Timeline, Search, Notes, Projects, Summaries, Queue, Settings, Onboarding
 Packages/RecallCore/          All logic, unit-tested with `swift test`
   Database/                   SQLite wrapper (WAL, FKs), migrations, FTS5 triggers, repositories
   Capture/                    ActiveWindowResolver, ScreenshotService (ScreenCaptureKit),
@@ -140,7 +150,7 @@ Jobs live in the `ai_jobs` table with a partial unique index so a pending/runnin
 
 ### Search
 
-`HybridSearch` interprets dates ("before lunch yesterday", "last Tuesday") and app references ("terminal", "browser") into filters, runs FTS5 (BM25) and vector similarity, and fuses them with reciprocal-rank fusion. User input never reaches FTS5 raw: every term is quoted. "Ask" answers come from the summary model using only retrieved records; each claim must cite `[C<id>]`/`[S<id>]`, citations to records that were not supplied are stripped, and an answer without valid citations is reported as insufficient evidence.
+`HybridSearch` interprets dates ("before lunch yesterday", "last Tuesday") and app references ("terminal", "browser") into filters, runs FTS5 (BM25) and vector similarity, and fuses them with reciprocal-rank fusion. User input never reaches FTS5 raw: every term is quoted. "Ask" answers come from the summary model using only retrieved records; each claim must cite `[C<id>]`/`[S<id>]`/`[N<id>]`, citations to records that were not supplied are stripped, and an answer without valid citations is reported as insufficient evidence.
 
 ## Status against the spec
 
@@ -159,7 +169,8 @@ Jobs live in the `ai_jobs` table with a partial unique index so a pending/runnin
 
 - **Only screenshots are encrypted.** Screenshots and thumbnails are encrypted at rest (see [Screenshot encryption](#screenshot-encryption)), but the database — recognized text, AI descriptions, window titles, summaries — is plain SQLite and relies on FileVault. SQLCipher is the planned next step ([TODO.md](TODO.md)).
 - **Vector search** is an exact streaming scan behind a `VectorIndex` protocol — fine for a single user's history (especially time-filtered), replaceable with sqlite-vec/HNSW later.
-- **Notifications** and a configurable hot key are not implemented (the hot key is fixed to ⌃⌥⌘P).
+- **Notifications** and configurable hot keys are not implemented (they're fixed to ⌃⌥⌘P and ⌃⌥⌘N).
+- **Notes are keyword-searched only**; they aren't embedded for semantic search.
 - **Cloud providers are tested against recorded request/response shapes and the AWS SigV4 test vectors, not live accounts.** Verify with your own OpenAI key / AWS account.
 - With ad hoc signing, macOS may ask again for keychain access after each rebuild.
 - **Notarization**: hardened runtime is on, but distribution signing/notarization needs a Developer ID.

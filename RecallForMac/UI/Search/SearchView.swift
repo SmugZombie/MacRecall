@@ -13,6 +13,7 @@ struct SearchView: View {
     @State private var answer: GroundedAnswer?
     @State private var answering = false
     @State private var selectedCaptureID: Int64?
+    @State private var selectedNoteID: Int64?
     @State private var searchTask: Task<Void, Never>?
     @State private var askTask: Task<Void, Never>?
     @State private var recent: [String] = RecentSearches.load()
@@ -25,14 +26,20 @@ struct SearchView: View {
             content
         }
         .navigationTitle(projectID == nil ? "Search" : "Search Project")
-        .inspector(isPresented: Binding(get: { selectedCaptureID != nil }, set: { if !$0 { selectedCaptureID = nil } })) {
-            if let id = selectedCaptureID {
+        .inspector(isPresented: Binding(get: { selectedCaptureID != nil || selectedNoteID != nil },
+                                        set: { if !$0 { selectedCaptureID = nil; selectedNoteID = nil } })) {
+            if let id = selectedNoteID {
+                NoteDetailView(noteID: id, onClose: { selectedNoteID = nil; fieldFocused = true })
+                    .inspectorColumnWidth(min: 380, ideal: 520, max: 900)
+            } else if let id = selectedCaptureID {
                 CaptureDetailView(captureID: id, sequence: results?.captures.map(\.id),
                                   onClose: { selectedCaptureID = nil; fieldFocused = true },
                                   onSelect: { selectedCaptureID = $0 })
                     .inspectorColumnWidth(min: 380, ideal: 520, max: 900)
             }
         }
+        .onChange(of: selectedCaptureID) { if selectedCaptureID != nil { selectedNoteID = nil } }
+        .onChange(of: selectedNoteID) { if selectedNoteID != nil { selectedCaptureID = nil } }
     }
 
     private var searchBar: some View {
@@ -94,6 +101,15 @@ struct SearchView: View {
                 if answering || answer != nil {
                     Section("Answer") { answerView }
                 }
+                if !results.notes.isEmpty {
+                    Section("Notes") {
+                        ForEach(results.notes) { hit in
+                            NoteRow(note: hit.note, snippet: hit.snippet, selected: selectedNoteID == hit.id, showDate: true)
+                                .contentShape(Rectangle())
+                                .onTapGesture { remember(); selectedNoteID = hit.id }
+                        }
+                    }
+                }
                 if !results.sessions.isEmpty {
                     Section("Sessions") {
                         ForEach(results.sessions) { hit in
@@ -130,7 +146,7 @@ struct SearchView: View {
                 ContentUnavailableView {
                     Label("Search your history", systemImage: "magnifyingglass")
                 } description: {
-                    Text("Matches recognized text, window titles, applications, AI descriptions and projects. Dates like “yesterday morning” or “last Tuesday” and app names like “terminal” become filters.")
+                    Text("Matches recognized text, window titles, applications, AI descriptions, projects and your notes. Dates like “yesterday morning” or “last Tuesday” and app names like “terminal” become filters.")
                 }
                 if !recent.isEmpty {
                     VStack(alignment: .leading, spacing: 6) {
@@ -170,6 +186,8 @@ struct SearchView: View {
                                 Button("S\(id)") {
                                     if let first = try? state.store?.captures(inSession: id).first { selectedCaptureID = first.id }
                                 }.buttonStyle(.link)
+                            case .note(let id):
+                                Button("N\(id)") { selectedNoteID = id }.buttonStyle(.link)
                             }
                         }
                     }
@@ -248,6 +266,7 @@ struct SearchView: View {
         answer = nil
         error = nil
         selectedCaptureID = nil
+        selectedNoteID = nil
         fieldFocused = true
     }
 

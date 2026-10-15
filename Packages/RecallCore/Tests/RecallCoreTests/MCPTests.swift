@@ -50,6 +50,49 @@ import Testing
         return c
     }
 
+    // MARK: Notes
+
+    @Test func notesAreListedSearchedAndShown() async throws {
+        let store = try makeStore()
+        let project = try store.createProject(name: "Atlas")
+        let lunch = try store.addNote(text: "Took lunch from 12 to 1", at: Self.now.addingTimeInterval(-3 * 3600))
+        let done = try store.addNote(text: "Completed work on the exporter\nPR is up", projectID: project,
+                                     attachments: [NewNoteAttachment(fileName: "exporter.swift", data: Data("let x = 1".utf8))],
+                                     at: Self.now.addingTimeInterval(-600))
+        try store.addNote(text: "Old note", at: Self.now.addingTimeInterval(-30 * 86400))
+        let server = makeMCP(store).server(version: "1")
+
+        let list = try await callTool(server, "list_notes")
+        #expect(!list.isError)
+        #expect(list.text.contains("N\(done.id) Wed 2026-10-14 09:50 \"Completed work on the exporter\" · project: Atlas · attached: exporter.swift"))
+        #expect(list.text.contains("  PR is up"))
+        #expect(list.text.contains("N\(lunch.id)"))
+        #expect(!list.text.contains("Old note"))  // older than the default 7 days
+        #expect(list.text.range(of: "N\(done.id)")!.lowerBound < list.text.range(of: "N\(lunch.id)")!.lowerBound)
+
+        let matching = try await callTool(server, "list_notes", ["query": "lunch"])
+        #expect(matching.text.contains("N\(lunch.id)") && !matching.text.contains("N\(done.id)"))
+        let inProject = try await callTool(server, "list_notes", ["project": "atlas"])
+        #expect(inProject.text.contains("N\(done.id)") && !inProject.text.contains("N\(lunch.id)"))
+
+        let note = try await callTool(server, "get_note", ["id": "N\(done.id)"])
+        #expect(note.text.contains("Project: Atlas"))
+        #expect(note.text.contains("- exporter.swift ("))
+        #expect(note.text.contains("contents not available"))
+        #expect(!note.text.contains("let x = 1"))
+        #expect(note.text.contains("Text:\nCompleted work on the exporter\nPR is up"))
+        let missing = try await callTool(server, "get_note", ["id": 999])
+        #expect(missing.isError)
+
+        let search = try await callTool(server, "search_history", ["query": "exporter"])
+        #expect(search.text.contains("Notes written by the user:"))
+        #expect(search.text.contains("**exporter**"))
+
+        let summary = try await callTool(server, "daily_summary")
+        #expect(summary.text.contains("## Notes"))
+        #expect(summary.text.contains("[note \(lunch.id)]"))
+    }
+
     // MARK: Protocol
 
     @Test func handshakeAndToolList() async throws {
@@ -71,7 +114,8 @@ import Testing
         let list = try await call(server, ["jsonrpc": "2.0", "id": 2, "method": "tools/list"])
         let tools = try #require((list?["result"] as? [String: Any])?["tools"] as? [[String: Any]])
         #expect(Set(tools.compactMap { $0["name"] as? String }) == ["search_history", "get_capture", "get_screenshot", "get_session",
-                                                                    "list_sessions", "usage_report", "daily_summary", "list_projects"])
+                                                                    "list_sessions", "usage_report", "daily_summary", "list_projects",
+                                                                    "list_notes", "get_note"])
         for tool in tools {
             #expect((tool["inputSchema"] as? [String: Any])?["type"] as? String == "object")
             #expect((tool["annotations"] as? [String: Any])?["readOnlyHint"] as? Bool == true)

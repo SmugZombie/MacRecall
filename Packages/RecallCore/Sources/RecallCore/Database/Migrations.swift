@@ -7,6 +7,7 @@ enum Migrations {
         (1, v1),
         (2, v2),
         (3, v3),
+        (4, v4),
     ]
 
     static func migrate(_ db: SQLiteDatabase) throws {
@@ -59,6 +60,60 @@ enum Migrations {
     ALTER TABLE ai_jobs ADD COLUMN processing_seconds REAL NOT NULL DEFAULT 0;
     UPDATE ai_jobs SET processing_seconds = MAX(0, completed_at - started_at)
         WHERE completed_at IS NOT NULL AND started_at IS NOT NULL;
+    """
+
+    /// Notes the user writes, with attached files stored encrypted under `Data.noindex/attachments/`.
+    static let v4 = """
+    CREATE TABLE notes (
+        id INTEGER PRIMARY KEY,
+        created_at REAL NOT NULL,
+        updated_at REAL NOT NULL,
+        timezone TEXT NOT NULL,
+        text TEXT NOT NULL DEFAULT '',
+        project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL
+    );
+    CREATE INDEX notes_time ON notes(created_at);
+
+    CREATE TABLE note_attachments (
+        id INTEGER PRIMARY KEY,
+        note_id INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+        file_name TEXT NOT NULL,
+        path TEXT NOT NULL,
+        content_type TEXT NOT NULL DEFAULT '',
+        byte_count INTEGER NOT NULL DEFAULT 0,
+        is_image INTEGER NOT NULL DEFAULT 0,
+        created_at REAL NOT NULL
+    );
+    CREATE INDEX note_attachments_note ON note_attachments(note_id);
+
+    CREATE VIRTUAL TABLE note_fts USING fts5(
+        text, attachments, project,
+        tokenize = 'unicode61 remove_diacritics 2'
+    );
+    CREATE TRIGGER notes_fts_insert AFTER INSERT ON notes BEGIN
+        INSERT INTO note_fts(rowid, text, attachments, project) VALUES (
+            new.id, new.text, '',
+            COALESCE((SELECT name FROM projects WHERE id = new.project_id), '')
+        );
+    END;
+    CREATE TRIGGER notes_fts_update AFTER UPDATE OF text, project_id ON notes BEGIN
+        DELETE FROM note_fts WHERE rowid = old.id;
+        INSERT INTO note_fts(rowid, text, attachments, project) VALUES (
+            new.id, new.text,
+            COALESCE((SELECT GROUP_CONCAT(file_name, ' ') FROM note_attachments WHERE note_id = new.id), ''),
+            COALESCE((SELECT name FROM projects WHERE id = new.project_id), '')
+        );
+    END;
+    CREATE TRIGGER notes_fts_delete AFTER DELETE ON notes BEGIN
+        DELETE FROM note_fts WHERE rowid = old.id;
+    END;
+    -- Attachment names are searchable; touching the note re-runs its index trigger.
+    CREATE TRIGGER note_attachments_fts_insert AFTER INSERT ON note_attachments BEGIN
+        UPDATE notes SET text = text WHERE id = new.note_id;
+    END;
+    CREATE TRIGGER note_attachments_fts_delete AFTER DELETE ON note_attachments BEGIN
+        UPDATE notes SET text = text WHERE id = old.note_id;
+    END;
     """
 
     static let v1 = """

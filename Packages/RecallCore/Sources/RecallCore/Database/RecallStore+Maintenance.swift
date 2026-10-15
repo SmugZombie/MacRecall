@@ -67,12 +67,13 @@ extension RecallStore {
 
     public func deleteAllHistory() throws {
         try db.transaction {
-            for table in ["captures", "sessions", "activity_events", "ai_jobs", "embeddings", "daily_summaries", "windows"] {
+            for table in ["captures", "sessions", "activity_events", "ai_jobs", "embeddings", "daily_summaries", "windows",
+                          "note_attachments", "notes"] {
                 try db.run("DELETE FROM \(table)")
             }
             try db.run("DELETE FROM applications")
         }
-        for dir in [paths.screenshots, paths.thumbnails] {
+        for dir in [paths.screenshots, paths.thumbnails, paths.attachments] {
             try? FileManager.default.removeItem(at: dir)
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         }
@@ -97,6 +98,7 @@ extension RecallStore {
         try db.transaction {
             try db.run("DELETE FROM capture_fts")
             try db.run("DELETE FROM session_fts")
+            try db.run("DELETE FROM note_fts")
             try db.run("""
                 INSERT INTO capture_fts(rowid, app_name, window_title, ocr_text, ai_description, project)
                 SELECT c.id, a.name, COALESCE(w.title, ''), c.ocr_text, c.ai_description, COALESCE(p.name, '')
@@ -109,8 +111,18 @@ extension RecallStore {
                 INSERT INTO session_fts(rowid, title, summary, project)
                 SELECT s.id, s.title, s.summary, COALESCE(p.name, '') FROM sessions s LEFT JOIN projects p ON p.id = s.project_id
                 """)
+            try db.run("""
+                INSERT INTO note_fts(rowid, text, attachments, project)
+                SELECT n.id, n.text,
+                    COALESCE((SELECT GROUP_CONCAT(file_name, ' ') FROM note_attachments WHERE note_id = n.id), ''),
+                    COALESCE(p.name, '')
+                FROM notes n LEFT JOIN projects p ON p.id = n.project_id
+                """)
         }
-        try db.execute("INSERT INTO capture_fts(capture_fts) VALUES('optimize'); INSERT INTO session_fts(session_fts) VALUES('optimize');")
+        try db.execute("""
+            INSERT INTO capture_fts(capture_fts) VALUES('optimize'); INSERT INTO session_fts(session_fts) VALUES('optimize');
+            INSERT INTO note_fts(note_fts) VALUES('optimize');
+            """)
     }
 
     public func storageStats() throws -> StorageStats {
@@ -130,6 +142,7 @@ extension RecallStore {
             dbBytes += (attrs?[.size] as? Int64) ?? 0
         }
         return StorageStats(captureCount: count, databaseBytes: dbBytes,
-                            imageBytes: size(paths.screenshots) + size(paths.thumbnails), oldestCapture: oldest)
+                            imageBytes: size(paths.screenshots) + size(paths.thumbnails), oldestCapture: oldest,
+                            noteCount: try noteCount(), attachmentBytes: size(paths.attachments))
     }
 }
