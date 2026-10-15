@@ -100,15 +100,18 @@ struct QueueView: View {
             default: return "\(n) \(type.rawValue) job\(n == 1 ? "" : "s") waiting"
             }
         }
-        return HStack(alignment: .top, spacing: 10) {
+        // No .fixedSize(vertical:) on the text: at the near-zero width AppKit probes for the window's
+        // minimum size, it reported a 2,000+ pt height and pushed the whole window's content off-screen.
+        return HStack(alignment: .center, spacing: 10) {
             Image(systemName: "slider.horizontal.3").foregroundStyle(.orange)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Waiting for setup, not a backlog").font(.subheadline.weight(.semibold))
                 Text(parts.joined(separator: "; ") + ". They'll be processed once you choose a model in Settings → AI\(state.settings.aiProvider == .lmStudio ? " (LM Studio includes an embedding model such as nomic-embed-text)" : "").")
-                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(3)
             }
-            Spacer()
-            Button("Open AI Settings…") { activateApp(); openSettings() }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .layoutPriority(1)
+            Button("Open AI Settings…") { activateApp(); openSettings() }.fixedSize()
         }
         .padding(12)
         .background(.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))

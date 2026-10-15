@@ -49,7 +49,9 @@ struct MainView: View {
             .navigationSplitViewColumnWidth(min: 200, ideal: 230)
             .safeAreaInset(edge: .bottom) { statusFooter }
         } detail: {
-            detail
+            // A detail view must never dictate the window's minimum height: if one reports a large
+            // minimum, SwiftUI lays the split view out taller than the window and both columns shift off-screen.
+            detail.frame(minHeight: 0, maxHeight: .infinity)
         }
         .onAppear { consumeNavigation() }
         .onChange(of: nav.section) { consumeNavigation() }
