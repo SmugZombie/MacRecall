@@ -47,6 +47,8 @@ public struct RecallSettings: Codable, Sendable, Equatable {
     // AI agents
     /// Lets MCP clients (`RecallForMac --mcp`) read history. Off until the user turns it on.
     public var mcpEnabled = false
+    /// Also lets them view screenshots (`get_screenshot`). Separate because images show more than redacted text.
+    public var mcpScreenshotsEnabled = false
 
     // General
     public var notificationsEnabled = false
@@ -132,6 +134,7 @@ public struct RecallSettings: Codable, Sendable, Equatable {
         automaticUpdateChecks = v(.automaticUpdateChecks, d.automaticUpdateChecks)
         skippedUpdateVersion = v(.skippedUpdateVersion, d.skippedUpdateVersion)
         mcpEnabled = v(.mcpEnabled, d.mcpEnabled)
+        mcpScreenshotsEnabled = v(.mcpScreenshotsEnabled, d.mcpScreenshotsEnabled)
         notificationsEnabled = v(.notificationsEnabled, d.notificationsEnabled)
         showTimezone = v(.showTimezone, d.showTimezone)
         onboardingCompleted = v(.onboardingCompleted, d.onboardingCompleted)

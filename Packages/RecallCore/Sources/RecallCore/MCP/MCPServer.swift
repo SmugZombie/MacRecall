@@ -1,21 +1,39 @@
 import Foundation
 
-/// One tool an MCP client can call. Handlers return plain text for the agent to read.
+/// What a tool returns: text, images, or both, in order.
+public struct MCPToolResult: @unchecked Sendable {
+    public var content: [[String: Any]]
+
+    public static func text(_ text: String) -> MCPToolResult { MCPToolResult(content: [["type": "text", "text": text]]) }
+
+    public func image(_ data: Data, mimeType: String) -> MCPToolResult {
+        MCPToolResult(content: content + [["type": "image", "data": data.base64EncodedString(), "mimeType": mimeType]])
+    }
+}
+
+/// One tool an MCP client can call.
 public struct MCPTool: @unchecked Sendable {
     public var name: String
     public var title: String
     public var description: String
     /// JSON Schema for the arguments object.
     public var inputSchema: [String: Any]
-    public var handler: @Sendable ([String: Any]) async throws -> String
+    public var handler: @Sendable ([String: Any]) async throws -> MCPToolResult
 
     public init(name: String, title: String, description: String, inputSchema: [String: Any],
-                handler: @escaping @Sendable ([String: Any]) async throws -> String) {
+                result handler: @escaping @Sendable ([String: Any]) async throws -> MCPToolResult) {
         self.name = name
         self.title = title
         self.description = description
         self.inputSchema = inputSchema
         self.handler = handler
+    }
+
+    /// A tool that returns plain text for the agent to read.
+    public init(name: String, title: String, description: String, inputSchema: [String: Any],
+                handler: @escaping @Sendable ([String: Any]) async throws -> String) {
+        self.init(name: name, title: title, description: description, inputSchema: inputSchema,
+                  result: { .text(try await handler($0)) })
     }
 }
 
@@ -116,9 +134,9 @@ public final class MCPServer: @unchecked Sendable {
             }
             if let denied = authorize() { return Self.toolResult(denied, isError: true) }
             do {
-                let text = try await tool.handler(params["arguments"] as? [String: Any] ?? [:])
+                let result = try await tool.handler(params["arguments"] as? [String: Any] ?? [:])
                 onToolCall(clientName)
-                return Self.toolResult(text, isError: false)
+                return ["content": result.content, "isError": false]
             } catch {
                 return Self.toolResult(error.localizedDescription, isError: true)
             }

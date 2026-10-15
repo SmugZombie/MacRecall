@@ -639,6 +639,10 @@ private struct MCPAccessSection: View {
         Section("AI agent access (MCP)") {
             Toggle("Allow AI agents to read your history", isOn: $state.settings.mcpEnabled)
             if state.settings.mcpEnabled {
+                Toggle(isOn: $state.settings.mcpScreenshotsEnabled) {
+                    Text("Allow agents to view screenshots")
+                    Text("Agents can fetch a capture's screenshot (decrypted, downscaled). Images can show more than the redacted text, such as photos, other people's messages and anything OCR missed.")
+                }
                 LabeledContent("Claude Code") {
                     HStack(alignment: .top) {
                         Text(claudeCodeCommand)
@@ -661,7 +665,7 @@ private struct MCPAccessSection: View {
                 Text("Last read by \(lastAccess.client) \(lastAccess.date.formatted(.relative(presentation: .named))).")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            Text("Lets MCP clients such as Claude Code, Claude Desktop or Cursor search your history and report on your usage: recognized text, AI descriptions, window titles, sessions, projects, summaries and app time. Access is read-only and screenshots are never shared. Whatever an agent reads goes to its AI model, so it leaves this Mac if the agent uses a cloud model. Turning this off blocks agents immediately.")
+            Text("Lets MCP clients such as Claude Code, Claude Desktop or Cursor search your history and report on your usage: recognized text, AI descriptions, window titles, sessions, projects, summaries and app time. Access is read-only, and screenshots are shared only if you allow it above. Whatever an agent reads goes to its AI model, so it leaves this Mac if the agent uses a cloud model. Turning this off blocks agents immediately.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
         .onAppear { lastAccess = MCPCommand.lastAccess() }

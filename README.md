@@ -75,13 +75,15 @@ The agent starts the app binary with `--mcp`. That process only opens the librar
 |---|---|
 | `search_history` | Keyword search over on-screen text, window titles, apps, AI descriptions and sessions, with date (`from`/`to` or `when: "yesterday morning"`), app and project filters |
 | `get_capture` | One capture's time, app, window, project, session, AI description and full recognized text |
+| `get_screenshot` | A capture's screenshot as an image (full size up to 2560 px, or the thumbnail), only if you've allowed it |
 | `get_session` | A session's title, summary, active time, apps and captures |
 | `list_sessions` | Sessions in a time range (default today) |
 | `usage_report` | Active time by app, project, window or day |
 | `daily_summary` | The day's time, projects, apps, sessions and errors seen on screen |
 | `list_projects` | Projects with aliases, repositories and recent time |
 
-- **Only text is shared, never screenshots.** Whatever the agent reads goes to its model, so it leaves your Mac if the agent uses a cloud model. Redaction applies, because sensitive text is removed before it's stored.
+- **Screenshots need a second opt-in.** Agents get text only until you also turn on **Allow agents to view screenshots**, which is off by default. Images can show more than the redacted text, such as photos, other people's messages and anything OCR missed. The `--mcp` process decrypts screenshots in memory with the same keychain key as the app.
+- Whatever the agent reads goes to its model, so it leaves your Mac if the agent uses a cloud model. Redaction applies to both, because sensitive text is removed (and blacked out in screenshots) before anything is stored.
 - Search is keyword-only and doesn't call your embedding provider. The agent does the reasoning itself.
 - Settings shows which client last read the history, and when.
 
