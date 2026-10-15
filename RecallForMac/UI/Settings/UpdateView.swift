@@ -19,7 +19,10 @@ struct UpdateView: View {
         }
         .padding(24)
         .frame(width: 560)
-        .frame(minHeight: 200)
+        // Pin the height to the content so the window grows when release notes arrive.
+        // A bare minHeight made 200pt the window's minimum and clipped the buttons.
+        .frame(minHeight: 200, alignment: .top)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private var title: String {
