@@ -253,6 +253,31 @@ import Testing
         #expect(!rules.matches("2026-10-14 15:53:12 build 1234567"))
     }
 
+    @Test func ssnRuleNeedsIssuableNumber() {
+        #expect(rules.redact("SSN: 123-45-6789.") == "SSN: [REDACTED].")
+        #expect(rules.matches("ssn 078–05–1120"))  // OCR often reads hyphens as en dashes
+        // Never issued: area 000/666/9xx, group 00, serial 0000.
+        for invalid in ["000-12-3456", "666-12-3456", "912-34-5678", "123-00-4567", "123-45-0000"] {
+            #expect(!rules.matches("id \(invalid)"), "\(invalid)")
+        }
+        // Same shape inside longer identifiers, dates and phone numbers.
+        #expect(!rules.matches("part 1123-45-6789 and 123-45-67890"))
+        #expect(!rules.matches("ref 9-123-45-6789-2"))
+        #expect(!rules.matches("2026-10-14 call 555-123-4567"))
+    }
+
+    @Test func savedRulesGainNewBuiltInRules() throws {
+        // Settings saved before the SSN rule existed, with one built-in rule switched off and a custom rule.
+        var saved = SensitiveContentRules(rules: SensitiveContentRules.defaults.filter { $0.name != "Social Security number" })
+        saved.rules[0].enabled = false
+        saved.rules.append(.init(name: "Ticket", pattern: "TKT-\\d+"))
+        let decoded = try JSONDecoder().decode(SensitiveContentRules.self, from: JSONEncoder().encode(saved))
+        #expect(decoded.rules.count == SensitiveContentRules.defaults.count + 1)
+        #expect(decoded.rules[0].enabled == false)
+        #expect(decoded.rules.contains { $0.name == "Ticket" })
+        #expect(decoded.matches("123-45-6789"))
+    }
+
     func blank(_ w: Int = 400, _ h: Int = 100) -> CGImage {
         ImageProcessing.draw(width: w, height: h) { ctx in
             ctx.setFillColor(CGColor(gray: 1, alpha: 1)); ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))

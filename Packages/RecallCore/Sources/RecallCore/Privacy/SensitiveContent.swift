@@ -60,6 +60,15 @@ public struct SensitiveContentRules: Codable, Sendable, Equatable {
 
     public init(rules: [Rule] = SensitiveContentRules.defaults) { self.rules = rules }
 
+    /// Saved settings keep the whole rule list, so built-in rules added in later versions are
+    /// appended here. Rules can be switched off but not removed, so a missing one was never seen.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        rules = try c.decode([Rule].self, forKey: .rules)
+        let names = Set(rules.map(\.name))
+        rules += Self.defaults.filter { !names.contains($0.name) }
+    }
+
     public static let defaults: [Rule] = [
         Rule(name: "AWS access key", pattern: #"\b(AKIA|ASIA)[0-9A-Z]{16}\b"#),
         Rule(name: "Private key block", pattern: #"-----BEGIN [A-Z ]*PRIVATE KEY-----"#),
@@ -71,6 +80,14 @@ public struct SensitiveContentRules: Codable, Sendable, Equatable {
         Rule(name: "Connection string credentials", pattern: #"(?i)\b[a-z][a-z0-9+.-]*://[^\s:/@]+:[^\s@]+@"#),
         // Not part of a longer number; validated further by `isLikelyCardNumber`.
         Rule(name: "Payment card number", pattern: #"(?<![\d-])\d(?:[ -]?\d){12,18}(?![\d])"#),
+        // xxx-xx-xxxx, not part of a longer number; validated further by `isLikelySSN`.
+        Rule(name: "Social Security number", pattern: #"(?<![\d\-–])\d{3}[\-–]\d{2}[\-–]\d{4}(?![\d\-–])"#),
+    ]
+
+    /// Extra checks for rules whose pattern alone matches too many ordinary numbers.
+    static let validators: [String: @Sendable (String) -> Bool] = [
+        "Payment card number": isLikelyCardNumber,
+        "Social Security number": isLikelySSN,
     ]
 
     private var compiled: [(Rule, NSRegularExpression)] {
@@ -87,7 +104,7 @@ public struct SensitiveContentRules: Codable, Sendable, Equatable {
         for (rule, regex) in compiled {
             for match in regex.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
                 guard let range = Range(match.range, in: text) else { continue }
-                if rule.name == "Payment card number", !Self.isLikelyCardNumber(String(text[range])) { continue }
+                if let validate = Self.validators[rule.name], !validate(String(text[range])) { continue }
                 ranges.append(range)
             }
         }
@@ -130,6 +147,14 @@ public struct SensitiveContentRules: Codable, Sendable, Equatable {
         case (300...305).contains(prefix(3)) || [36, 38, 39].contains(prefix(2)): return (14...19).contains(n)  // Diners
         default: return false
         }
+    }
+
+    /// Numbers the SSA never issues: area 000, 666 or 900–999, group 00, serial 0000.
+    static func isLikelySSN(_ candidate: String) -> Bool {
+        let parts = candidate.split(whereSeparator: { $0 == "-" || $0 == "–" }).compactMap { Int($0) }
+        guard parts.count == 3 else { return false }
+        let (area, group, serial) = (parts[0], parts[1], parts[2])
+        return (1...899).contains(area) && area != 666 && group != 0 && serial != 0
     }
 
     static func luhnValid(_ digits: [Int]) -> Bool {
