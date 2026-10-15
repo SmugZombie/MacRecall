@@ -1,5 +1,7 @@
 # Recall for macOS
 
+![Recall — a private history of your Mac](docs/images/social-card.png)
+
 **Website:** https://smugzombie.github.io/MacRecall/ · **Download:** [latest release](https://github.com/SmugZombie/MacRecall/releases/latest)
 
 A native, local-first activity history for macOS. Recall captures the **focused window** at a regular interval, extracts text with Apple Vision, groups captures into work sessions, and makes everything searchable — by keyword out of the box, and with AI descriptions, summaries and semantic search when an AI provider is configured: [Ollama](https://ollama.com) or [LM Studio](https://lmstudio.ai) on your Mac, or OpenAI / Amazon Bedrock in the cloud.
