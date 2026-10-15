@@ -3,6 +3,10 @@ import os
 
 public struct QueueStatus: Sendable, Equatable {
     public var counts = QueueCounts()
+    /// Queued jobs that can't run until a model is chosen for them (e.g. embeddings with no embedding model).
+    public var awaitingConfiguration: [JobType: Int] = [:]
+    /// Pending jobs that will actually be processed: the real backlog.
+    public var actionablePending: Int { max(0, counts.pending - awaitingConfiguration.values.reduce(0, +)) }
     public var providerReachable = false
     public var aiPaused = false
     public var lastError: String?
@@ -123,15 +127,20 @@ public actor AIJobQueue {
     }
 
     public func currentStatus() -> QueueStatus {
-        status.counts = (try? store.queueCounts()) ?? status.counts
-        status.aiPaused = aiPaused
+        refreshCounts()
         return status
     }
 
     private func publish() {
+        refreshCounts()
+        onStatus?(status)
+    }
+
+    private func refreshCounts() {
         status.counts = (try? store.queueCounts()) ?? status.counts
         status.aiPaused = aiPaused
-        onStatus?(status)
+        let unconfigured = settings().unconfiguredJobTypes
+        status.awaitingConfiguration = status.counts.byType.filter { unconfigured.contains($0.key) && $0.value > 0 }
     }
 
     /// Job types an AI worker may claim right now, given configured models.

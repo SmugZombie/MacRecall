@@ -206,6 +206,16 @@ extension RecallSettings {
         }
     }
 
+    /// AI job types that can't run because no model is selected for them. Such jobs stay queued
+    /// (so choosing a model later backfills them) but aren't a processing backlog.
+    public var unconfiguredJobTypes: Set<JobType> {
+        var types: Set<JobType> = []
+        if embeddingModel.isEmpty { types.insert(.embedding) }
+        if visionModel.isEmpty && summaryModel.isEmpty { types.insert(.visionAnalysis) }
+        if summaryModel.isEmpty { types.formUnion([.sessionSummary, .dailySummary]) }
+        return types
+    }
+
     /// True when screenshots and text would leave this Mac.
     public var providerIsRemote: Bool {
         switch aiProvider {

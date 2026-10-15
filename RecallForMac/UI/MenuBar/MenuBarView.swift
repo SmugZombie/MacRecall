@@ -96,7 +96,8 @@ struct MenuBarView: View {
             Image(systemName: aiSymbol).foregroundStyle(aiColor)
             VStack(alignment: .leading, spacing: 2) {
                 Text(aiTitle).font(.subheadline)
-                Text("\(q.counts.pending) queued · \(q.counts.running) running" + (q.counts.failed > 0 ? " · \(q.counts.failed) failed" : ""))
+                Text("\(q.actionablePending) queued · \(q.counts.running) running" + (q.counts.failed > 0 ? " · \(q.counts.failed) failed" : "")
+                     + (q.awaitingConfiguration.isEmpty ? "" : " · \(q.awaitingConfiguration.values.reduce(0, +)) need setup"))
                     .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
@@ -112,14 +113,14 @@ struct MenuBarView: View {
         if q.aiPaused { return "AI processing paused" }
         if !state.settings.aiTransmissionAllowed { return "AI waiting for approval (Settings → AI)" }
         if !q.providerReachable { return "AI unavailable (\(state.settings.aiProvider.displayName) offline)" }
-        if q.counts.pending > 50 { return "AI backlog" }
+        if q.actionablePending > 50 { return "AI backlog" }
         return "AI ready"
     }
     private var aiSymbol: String { state.queueStatus.providerReachable && !state.queueStatus.aiPaused && state.settings.aiTransmissionAllowed ? "sparkles" : "sparkles.slash" }
     private var aiColor: Color {
         let q = state.queueStatus
         if q.aiPaused || !q.providerReachable || !state.settings.aiTransmissionAllowed { return .secondary }
-        return q.counts.pending > 50 ? .orange : .accentColor
+        return q.actionablePending > 50 ? .orange : .accentColor
     }
 }
 

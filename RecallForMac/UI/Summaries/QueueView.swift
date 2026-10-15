@@ -4,6 +4,7 @@ import SwiftUI
 
 struct QueueView: View {
     @EnvironmentObject private var state: AppState
+    @Environment(\.openSettings) private var openSettings
     @State private var jobs: [JobRecord] = []
     @State private var selection: JobRecord.ID?
     @State private var filter: ProcessingStatus?
@@ -12,7 +13,7 @@ struct QueueView: View {
         let q = state.queueStatus
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 24) {
-                stat("Queued", q.counts.pending)
+                stat("Queued", q.actionablePending)
                 stat("Running", q.counts.running)
                 stat("Failed", q.counts.failed)
                 VStack(alignment: .leading) {
@@ -35,9 +36,11 @@ struct QueueView: View {
                 .disabled(q.counts.failed == 0)
             }
             .padding(16)
-            if !q.counts.byType.isEmpty {
+            if !q.awaitingConfiguration.isEmpty { setupBanner(q.awaitingConfiguration) }
+            let runnable = q.counts.byType.filter { q.awaitingConfiguration[$0.key] == nil }
+            if !runnable.isEmpty {
                 HStack {
-                    ForEach(q.counts.byType.sorted(by: { $0.key.rawValue < $1.key.rawValue }), id: \.key) { type, n in
+                    ForEach(runnable.sorted(by: { $0.key.rawValue < $1.key.rawValue }), id: \.key) { type, n in
                         StatusPill(text: "\(type.rawValue.replacingOccurrences(of: "_", with: " ")): \(n)")
                     }
                 }
@@ -85,6 +88,31 @@ struct QueueView: View {
         .navigationTitle("Processing")
         .task(id: "\(state.queueStatus.counts.pending)-\(state.queueStatus.counts.failed)-\(state.queueStatus.counts.running)-\(String(describing: filter))") { reload() }
         .onAppear { state.refreshQueue() }
+    }
+
+    /// Jobs that can't run until a model is chosen. Not a backlog: they wait, and choosing a model processes them.
+    private func setupBanner(_ waiting: [JobType: Int]) -> some View {
+        let parts = waiting.sorted { $0.key.rawValue < $1.key.rawValue }.map { type, n -> String in
+            switch type {
+            case .embedding: return "\(n) embedding job\(n == 1 ? "" : "s") need an embedding model (semantic search)"
+            case .visionAnalysis: return "\(n) screenshot\(n == 1 ? "" : "s") need a vision or summary model"
+            case .sessionSummary, .dailySummary: return "\(n) summar\(n == 1 ? "y needs" : "ies need") a summary model"
+            default: return "\(n) \(type.rawValue) job\(n == 1 ? "" : "s") waiting"
+            }
+        }
+        return HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "slider.horizontal.3").foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Waiting for setup, not a backlog").font(.subheadline.weight(.semibold))
+                Text(parts.joined(separator: "; ") + ". They'll be processed once you choose a model in Settings → AI\(state.settings.aiProvider == .lmStudio ? " (LM Studio includes an embedding model such as nomic-embed-text)" : "").")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            Button("Open AI Settings…") { activateApp(); openSettings() }
+        }
+        .padding(12)
+        .background(.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+        .padding(.horizontal, 16).padding(.bottom, 10)
     }
 
     private func reload() { jobs = (try? state.store?.recentJobs(limit: 300, status: filter)) ?? [] }

@@ -106,6 +106,7 @@ extension RecallStore {
         }
     }
 
+    /// `byType` counts pending jobs per type (running jobs are counted in `running`).
     public func queueCounts() throws -> QueueCounts {
         var counts = QueueCounts()
         for row in try db.query("SELECT status, job_type, COUNT(*) AS n FROM ai_jobs WHERE status IN ('pending','running','failed') GROUP BY status, job_type") {
@@ -116,7 +117,7 @@ extension RecallStore {
             case "failed": counts.failed += n
             default: break
             }
-            if row.string("status") != "failed", let type = JobType(rawValue: row.string("job_type") ?? "") {
+            if row.string("status") == "pending", let type = JobType(rawValue: row.string("job_type") ?? "") {
                 counts.byType[type, default: 0] += n
             }
         }

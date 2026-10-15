@@ -585,3 +585,35 @@ final class ContextLimitedProvider: AIProvider, @unchecked Sendable {
         #expect(again.id == job.id && again.attempts == 0 && again.lastError == nil)
     }
 }
+
+@Suite struct AwaitingConfigurationTests {
+    @Test func unconfiguredTypesFollowModelSelection() {
+        var s = RecallSettings()
+        s.aiProvider = .lmStudio
+        s.visionModel = "gemma"
+        s.summaryModel = "gemma"
+        #expect(s.unconfiguredJobTypes == [.embedding])
+        s.embeddingModel = "nomic-embed-text"
+        #expect(s.unconfiguredJobTypes.isEmpty)
+        s.summaryModel = ""
+        #expect(s.unconfiguredJobTypes == [.sessionSummary, .dailySummary])  // vision still covered by the vision model
+        s.visionModel = ""
+        #expect(s.unconfiguredJobTypes.contains(.visionAnalysis))
+    }
+
+    @Test func statusSeparatesSetupFromBacklog() async throws {
+        let store = try makeStore()
+        for id in 1...5 { try store.enqueueJob(.embedding, entityType: "capture", entityID: Int64(id)) }
+        try store.enqueueJob(.visionAnalysis, entityType: "capture", entityID: 1)
+        try store.enqueueJob(.ocr, entityType: "capture", entityID: 2)
+        var settings = RecallSettings()
+        settings.aiProvider = .lmStudio
+        settings.visionModel = "gemma"
+        settings.summaryModel = "gemma"
+        let queue = AIJobQueue(store: store, ai: OllamaProvider(endpoint: "http://127.0.0.1:1"), settings: { settings })
+        let status = await queue.currentStatus()
+        #expect(status.counts.pending == 7)
+        #expect(status.awaitingConfiguration == [.embedding: 5])
+        #expect(status.actionablePending == 2)
+    }
+}

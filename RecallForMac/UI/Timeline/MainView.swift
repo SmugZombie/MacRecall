@@ -31,8 +31,8 @@ struct MainView: View {
                         HStack {
                             Text("Processing")
                             Spacer()
-                            if state.queueStatus.counts.pending > 0 {
-                                Text("\(state.queueStatus.counts.pending)").font(.caption).foregroundStyle(.secondary)
+                            if state.queueStatus.actionablePending > 0 {
+                                Text("\(state.queueStatus.actionablePending)").font(.caption).foregroundStyle(.secondary)
                             }
                         }
                     } icon: { Image(systemName: "cpu") }
