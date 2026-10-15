@@ -78,6 +78,23 @@ public final class RecallStore: @unchecked Sendable {
         try Migrations.migrate(db)
     }
 
+    /// Opens an existing library without migrating or writing it, for a second process such as the
+    /// MCP server. Fails if the library doesn't exist or was created by a newer version.
+    public init(readOnlyPaths paths: StoragePaths, keyStore: any ScreenshotKeyStore = KeychainScreenshotKeyStore()) throws {
+        guard FileManager.default.fileExists(atPath: paths.database.path) else {
+            throw SQLiteError(code: 14, message: "No Recall library at \(paths.database.path). Open Recall once to create it.")
+        }
+        self.paths = paths
+        self.db = try SQLiteDatabase(path: paths.database.path, readOnly: true)
+        self.vault = ScreenshotVault(paths: paths, keyStore: keyStore)
+        let version = try db.scalarInt("SELECT COALESCE(MAX(version), 0) FROM schema_migrations")
+        guard version == Migrations.all.last!.version else {
+            throw SQLiteError(code: 0, message: version > Migrations.all.last!.version
+                ? "The library was updated by a newer version of Recall. Update this copy."
+                : "The library needs updating. Open Recall once, then try again.")
+        }
+    }
+
     /// In-memory store for tests and previews.
     public init(inMemoryWithRoot root: URL, keyStore: any ScreenshotKeyStore = InMemoryScreenshotKeyStore()) throws {
         self.paths = StoragePaths(root: root)

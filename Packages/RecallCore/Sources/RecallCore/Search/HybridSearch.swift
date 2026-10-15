@@ -42,20 +42,22 @@ public struct HybridSearch: Sendable {
         self.vectorIndex = vectorIndex ?? ScanVectorIndex(store: store)
     }
 
-    public func search(_ query: String, projectID: Int64? = nil, exact: Bool = false, limit: Int = 60,
-                       now: Date = Date()) async throws -> SearchResults {
+    /// `range` and `applicationNames` replace what the query itself implies; explicit filters are never relaxed.
+    public func search(_ query: String, projectID: Int64? = nil, range: DateInterval? = nil, applicationNames: [String]? = nil,
+                       exact: Bool = false, limit: Int = 60, now: Date = Date()) async throws -> SearchResults {
         let apps = try store.applications().map(\.name)
         let interpretation = QueryInterpreter(now: now, knownApplications: apps).interpret(query)
         var relaxed: [String] = []
 
-        var scope = SearchScope(range: interpretation.range, applicationNames: interpretation.applicationNames, projectID: projectID)
+        var scope = SearchScope(range: range ?? interpretation.range, applicationNames: applicationNames ?? interpretation.applicationNames,
+                                projectID: projectID)
         let text = exact ? query : interpretation.keywordText
         let keyword = KeywordSearch(store: store)
 
         // Natural-language queries match any term (ranked by BM25); exact mode requires all terms.
         var kwHits = try keyword.searchCaptures(text, mode: exact ? .all : .any, scope: scope, limit: 150)
         var vecHits = try await semantic(query, scope: scope)
-        if kwHits.isEmpty && vecHits.isEmpty && !scope.applicationNames.isEmpty {
+        if kwHits.isEmpty && vecHits.isEmpty && !scope.applicationNames.isEmpty && applicationNames == nil {
             relaxed.append("application")
             scope.applicationNames = []
             kwHits = try keyword.searchCaptures(text, mode: exact ? .all : .any, scope: scope, limit: 150)

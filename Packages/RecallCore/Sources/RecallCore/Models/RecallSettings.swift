@@ -44,6 +44,10 @@ public struct RecallSettings: Codable, Sendable, Equatable {
     /// A version the user chose to skip; newer versions are still offered.
     public var skippedUpdateVersion = ""
 
+    // AI agents
+    /// Lets MCP clients (`RecallForMac --mcp`) read history. Off until the user turns it on.
+    public var mcpEnabled = false
+
     // General
     public var notificationsEnabled = false
     public var showTimezone = false
@@ -127,6 +131,7 @@ public struct RecallSettings: Codable, Sendable, Equatable {
         aiProcessingEnabled = v(.aiProcessingEnabled, d.aiProcessingEnabled)
         automaticUpdateChecks = v(.automaticUpdateChecks, d.automaticUpdateChecks)
         skippedUpdateVersion = v(.skippedUpdateVersion, d.skippedUpdateVersion)
+        mcpEnabled = v(.mcpEnabled, d.mcpEnabled)
         notificationsEnabled = v(.notificationsEnabled, d.notificationsEnabled)
         showTimezone = v(.showTimezone, d.showTimezone)
         onboardingCompleted = v(.onboardingCompleted, d.onboardingCompleted)

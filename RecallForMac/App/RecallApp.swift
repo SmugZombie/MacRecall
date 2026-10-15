@@ -2,7 +2,7 @@ import AppKit
 import RecallCore
 import SwiftUI
 
-@main
+/// Launched from `Launcher` in MCPCommand.swift.
 struct RecallApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var state = AppState.shared

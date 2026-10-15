@@ -76,9 +76,10 @@ public final class SQLiteDatabase: @unchecked Sendable {
     private let lock = NSRecursiveLock()
     public let path: String
 
-    public init(path: String) throws {
+    /// `readOnly` opens an existing database without changing it, alongside the app's own connection.
+    public init(path: String, readOnly: Bool = false) throws {
         self.path = path
-        let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
+        let flags = (readOnly ? SQLITE_OPEN_READONLY : SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE) | SQLITE_OPEN_FULLMUTEX
         let rc = sqlite3_open_v2(path, &handle, flags, nil)
         guard rc == SQLITE_OK else {
             let msg = handle.map { String(cString: sqlite3_errmsg($0)) } ?? "open failed"
@@ -86,6 +87,10 @@ public final class SQLiteDatabase: @unchecked Sendable {
             throw SQLiteError(code: rc, message: msg)
         }
         sqlite3_busy_timeout(handle, 5000)
+        if readOnly {
+            try execute("PRAGMA query_only = ON")
+            return
+        }
         try execute("PRAGMA foreign_keys = ON")
         if path != ":memory:" {
             try execute("PRAGMA journal_mode = WAL")

@@ -54,6 +54,35 @@ Screenshots and thumbnails are encrypted on disk with AES-GCM (CryptoKit), so ot
 
 The design and its limits are in [design/screenshot-encryption.md](design/screenshot-encryption.md).
 
+### AI agents (MCP)
+
+Recall can serve your history to an AI agent (Claude Code, Claude Desktop, Cursor or any other [MCP](https://modelcontextprotocol.io) client), so you can ask things like "what was I working on Tuesday afternoon?", "how long did I spend in Slack this week?" or "find the error I saw in the terminal yesterday".
+
+1. Turn on **Settings → Privacy → AI agent access (MCP)**. It's off by default, and turning it off blocks agents immediately.
+2. Add Recall to your agent. Settings shows the exact command for your install:
+
+   ```sh
+   claude mcp add --scope user recall -- "/Applications/RecallForMac.app/Contents/MacOS/RecallForMac" --mcp
+   ```
+
+   For other clients, **Copy JSON Configuration** gives the usual `mcpServers` entry (command: the app binary, args: `--mcp`).
+
+The agent starts the app binary with `--mcp`. That process only opens the library read-only and speaks MCP over stdin/stdout. It doesn't start the UI or capture anything, and it makes no network requests. It works whether or not Recall is running.
+
+| Tool | What it returns |
+|---|---|
+| `search_history` | Keyword search over on-screen text, window titles, apps, AI descriptions and sessions, with date (`from`/`to` or `when: "yesterday morning"`), app and project filters |
+| `get_capture` | One capture's time, app, window, project, session, AI description and full recognized text |
+| `get_session` | A session's title, summary, active time, apps and captures |
+| `list_sessions` | Sessions in a time range (default today) |
+| `usage_report` | Active time by app, project, window or day |
+| `daily_summary` | The day's time, projects, apps, sessions and errors seen on screen |
+| `list_projects` | Projects with aliases, repositories and recent time |
+
+- **Only text is shared, never screenshots.** Whatever the agent reads goes to its model, so it leaves your Mac if the agent uses a cloud model. Redaction applies, because sensitive text is removed before it's stored.
+- Search is keyword-only and doesn't call your embedding provider. The agent does the reasoning itself.
+- Settings shows which client last read the history, and when.
+
 ### Updates
 
 Recall checks GitHub Releases for this repository once a day (and from **Check for Updates…** in the app menu or Settings → General). When a newer version is out, it shows the release notes and can install it in place:
@@ -85,6 +114,7 @@ Packages/RecallCore/          All logic, unit-tested with `swift test`
   Search/                     Query interpretation, FTS5 search, vector index, hybrid RRF, grounded Q&A
   Privacy/                    CapturePolicy, sensitive-content redaction, retention
   Updates/                    GitHub release client, semantic versions, verified in-place installer
+  MCP/                        Stdio MCP server (JSON-RPC) and read-only history tools for `--mcp`
 ```
 
 ### Capture pipeline
@@ -123,7 +153,7 @@ Jobs live in the `ai_jobs` table with a partial unique index so a pending/runnin
 
 ### Known gaps
 
-- **Only screenshots are encrypted.** Screenshots and thumbnails are encrypted at rest (see [Screenshot encryption](#screenshot-encryption)), but the database — recognized text, AI descriptions, window titles, summaries — is plain SQLite and relies on FileVault. SQLCipher is the likely next step.
+- **Only screenshots are encrypted.** Screenshots and thumbnails are encrypted at rest (see [Screenshot encryption](#screenshot-encryption)), but the database — recognized text, AI descriptions, window titles, summaries — is plain SQLite and relies on FileVault. SQLCipher is the planned next step ([TODO.md](TODO.md)).
 - **Vector search** is an exact streaming scan behind a `VectorIndex` protocol — fine for a single user's history (especially time-filtered), replaceable with sqlite-vec/HNSW later.
 - **Notifications** and a configurable hot key are not implemented (the hot key is fixed to ⌃⌥⌘P).
 - **Cloud providers are tested against recorded request/response shapes and the AWS SigV4 test vectors, not live accounts.** Verify with your own OpenAI key / AWS account.

@@ -108,6 +108,7 @@ private struct PrivacySettings: View {
                 Toggle("Delete older history automatically", isOn: $state.settings.automaticCleanup)
             }
             ScreenshotEncryptionSection()
+            MCPAccessSection()
             Section("Sensitive content") {
                 Toggle("Redact matching text before storing or sending to AI", isOn: $state.settings.redactionEnabled)
                 if state.settings.redactionEnabled {
@@ -610,5 +611,65 @@ private struct ScreenshotEncryptionSection: View {
         } catch {
             message = error.localizedDescription
         }
+    }
+}
+
+/// Settings → Privacy → AI agent access (MCP).
+private struct MCPAccessSection: View {
+    @EnvironmentObject private var state: AppState
+    @State private var copied: String?
+    @State private var lastAccess = MCPCommand.lastAccess()
+
+    private var executable: String { Bundle.main.executablePath ?? "/Applications/RecallForMac.app/Contents/MacOS/RecallForMac" }
+    private var claudeCodeCommand: String { "claude mcp add --scope user recall -- \"\(executable)\" \(MCPCommand.flag)" }
+    private var jsonConfig: String {
+        """
+        {
+          "mcpServers": {
+            "recall": {
+              "command": "\(executable)",
+              "args": ["\(MCPCommand.flag)"]
+            }
+          }
+        }
+        """
+    }
+
+    var body: some View {
+        Section("AI agent access (MCP)") {
+            Toggle("Allow AI agents to read your history", isOn: $state.settings.mcpEnabled)
+            if state.settings.mcpEnabled {
+                LabeledContent("Claude Code") {
+                    HStack(alignment: .top) {
+                        Text(claudeCodeCommand)
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button(copied == "cli" ? "Copied" : "Copy") { copy(claudeCodeCommand, as: "cli") }
+                    }
+                }
+                LabeledContent("Claude Desktop, Cursor and others") {
+                    Button(copied == "json" ? "Copied" : "Copy JSON Configuration") { copy(jsonConfig, as: "json") }
+                }
+                if executable.contains("/DerivedData/") {
+                    Label("This is a development build. Point agents at the copy in Applications so the path keeps working.",
+                          systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption).foregroundStyle(.orange)
+                }
+            }
+            if let lastAccess {
+                Text("Last read by \(lastAccess.client) \(lastAccess.date.formatted(.relative(presentation: .named))).")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Text("Lets MCP clients such as Claude Code, Claude Desktop or Cursor search your history and report on your usage: recognized text, AI descriptions, window titles, sessions, projects, summaries and app time. Access is read-only and screenshots are never shared. Whatever an agent reads goes to its AI model, so it leaves this Mac if the agent uses a cloud model. Turning this off blocks agents immediately.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+        .onAppear { lastAccess = MCPCommand.lastAccess() }
+    }
+
+    private func copy(_ text: String, as id: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        copied = id
     }
 }
