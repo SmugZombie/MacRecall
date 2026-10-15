@@ -252,8 +252,9 @@ public final class BedrockProvider: AIProvider, @unchecked Sendable {
 
     static func error(status: Int, data: Data, errorType header: String?) -> AIProviderError {
         let obj = AIHTTP.object(data)
-        let type = (header ?? obj?["__type"] as? String ?? "").split(separator: ":").first.map(String.init)?
-            .split(separator: "#").last.map(String.init) ?? ""
+        let raw: String = header ?? (obj?["__type"] as? String) ?? ""
+        let qualified = raw.split(separator: ":").first.map(String.init) ?? ""
+        let type = qualified.split(separator: "#").last.map(String.init) ?? ""
         let message = AIHTTP.errorMessage(data)
         switch type {
         case "UnrecognizedClientException", "InvalidSignatureException", "ExpiredTokenException", "IncompleteSignature",
