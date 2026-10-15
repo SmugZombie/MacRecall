@@ -17,7 +17,8 @@ extension RecallStore {
             status: ProcessingStatus(rawValue: row.string("status") ?? "") ?? .pending,
             priority: Int(row.int("priority") ?? 0), attempts: Int(row.int("attempts") ?? 0),
             lastError: row.string("last_error"), createdAt: row.date("created_at") ?? Date(),
-            nextAttemptAt: row.date("next_attempt_at") ?? Date(), completedAt: row.date("completed_at"))
+            nextAttemptAt: row.date("next_attempt_at") ?? Date(), completedAt: row.date("completed_at"),
+            startedAt: row.date("started_at"), processingSeconds: row.double("processing_seconds") ?? 0)
     }
 
     /// Enqueues a job unless an identical one is already pending/running.
@@ -49,13 +50,21 @@ extension RecallStore {
         }
     }
 
+    /// SQL that adds the attempt in progress (if the job is running) to its processing total.
+    static func accumulate(_ now: Date) -> (String, [SQLBindable]) {
+        ("processing_seconds = processing_seconds + CASE WHEN status = 'running' AND started_at IS NOT NULL THEN MAX(0, ? - started_at) ELSE 0 END",
+         [now])
+    }
+
     public func completeJob(id: Int64, at date: Date = Date()) throws {
-        try db.run("UPDATE ai_jobs SET status = 'done', completed_at = ?, last_error = NULL WHERE id = ?", [date, id])
+        let (acc, accParams) = Self.accumulate(date)
+        try db.run("UPDATE ai_jobs SET \(acc), status = 'done', completed_at = ?, last_error = NULL WHERE id = ?", accParams + [date, id])
     }
 
     /// Returns the job to the queue without counting an attempt (e.g. Ollama went offline mid-flight).
-    public func deferJob(id: Int64, until date: Date) throws {
-        try db.run("UPDATE ai_jobs SET status = 'pending', next_attempt_at = ? WHERE id = ?", [date, id])
+    public func deferJob(id: Int64, until date: Date, now: Date = Date()) throws {
+        let (acc, accParams) = Self.accumulate(now)
+        try db.run("UPDATE ai_jobs SET \(acc), status = 'pending', next_attempt_at = ? WHERE id = ?", accParams + [date, id])
     }
 
     /// Records a failure. Retryable failures back off exponentially up to `maxAttempts`.
@@ -67,12 +76,14 @@ extension RecallStore {
         let truncated = String(error.prefix(500))
         if retryable && attempts < maxAttempts {
             let delay = Self.backoff(attempt: attempts, base: baseDelay, cap: maxDelay)
-            try db.run("UPDATE ai_jobs SET status = 'pending', attempts = ?, last_error = ?, next_attempt_at = ? WHERE id = ?",
-                       [attempts, truncated, now.addingTimeInterval(delay), id])
+            let (acc, accParams) = Self.accumulate(now)
+            try db.run("UPDATE ai_jobs SET \(acc), status = 'pending', attempts = ?, last_error = ?, next_attempt_at = ? WHERE id = ?",
+                       accParams + [attempts, truncated, now.addingTimeInterval(delay), id])
             return .pending
         }
-        try db.run("UPDATE ai_jobs SET status = 'failed', attempts = ?, last_error = ?, completed_at = ? WHERE id = ?",
-                   [attempts, truncated, now, id])
+        let (acc, accParams) = Self.accumulate(now)
+        try db.run("UPDATE ai_jobs SET \(acc), status = 'failed', attempts = ?, last_error = ?, completed_at = ? WHERE id = ?",
+                   accParams + [attempts, truncated, now, id])
         return .failed
     }
 

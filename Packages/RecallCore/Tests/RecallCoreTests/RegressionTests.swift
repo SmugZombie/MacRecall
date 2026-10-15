@@ -617,3 +617,56 @@ final class ContextLimitedProvider: AIProvider, @unchecked Sendable {
         #expect(status.actionablePending == 2)
     }
 }
+
+@Suite struct JobTimingTests {
+    @Test func singleAttempt() throws {
+        let store = try makeStore()
+        let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+        try store.enqueueJob(.visionAnalysis, entityType: "capture", entityID: 1, at: t0)
+        let job = try #require(try store.claimJobs(types: [.visionAnalysis], limit: 1, now: t0.addingTimeInterval(30)).first)
+        try store.completeJob(id: job.id, at: t0.addingTimeInterval(42))
+        let done = try #require(try store.recentJobs().first)
+        #expect(done.totalProcessingTime() == 12)   // 30 → 42; the 30 s queued isn't processing time
+        #expect(done.queueWait == 30)
+    }
+
+    @Test func sumsAcrossRetriesAndShowsLiveTotal() throws {
+        let store = try makeStore()
+        let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+        try store.enqueueJob(.embedding, entityType: "capture", entityID: 1, at: t0)
+        var job = try #require(try store.claimJobs(types: [.embedding], limit: 1, now: t0).first)
+        try store.failJob(id: job.id, error: "timeout", retryable: true, now: t0.addingTimeInterval(5))   // 5 s
+        job = try #require(try store.claimJobs(types: [.embedding], limit: 1, now: t0.addingTimeInterval(100)).first)
+        try store.deferJob(id: job.id, until: t0.addingTimeInterval(110), now: t0.addingTimeInterval(103))  // +3 s
+        job = try #require(try store.claimJobs(types: [.embedding], limit: 1, now: t0.addingTimeInterval(200)).first)
+
+        let running = try #require(try store.recentJobs().first)
+        #expect(running.status == .running)
+        #expect(running.totalProcessingTime(now: t0.addingTimeInterval(204)) == 12)  // 8 finished + 4 in progress
+
+        try store.completeJob(id: job.id, at: t0.addingTimeInterval(210))  // +10 s
+        #expect(try store.recentJobs().first?.totalProcessingTime() == 18)
+    }
+
+    @Test func pendingJobsHaveNoTime() throws {
+        let store = try makeStore()
+        try store.enqueueJob(.ocr, entityType: "capture", entityID: 1)
+        #expect(try store.recentJobs().first?.totalProcessingTime() == nil)
+    }
+
+    @Test func migrationBackfillsFinishedJobs() throws {
+        let db = try SQLiteDatabase(path: ":memory:")
+        try db.execute("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at REAL NOT NULL)")
+        try db.transaction {
+            try db.execute(Migrations.v1)
+            try db.execute(Migrations.v2)
+            try db.run("INSERT INTO schema_migrations VALUES (1, 0), (2, 0)")
+        }
+        try db.run("""
+            INSERT INTO ai_jobs (job_type, entity_type, entity_id, status, created_at, next_attempt_at, started_at, completed_at)
+            VALUES ('ocr', 'capture', 1, 'done', 0, 0, 100, 107.5)
+            """)
+        try Migrations.migrate(db)
+        #expect(try db.queryOne("SELECT processing_seconds AS p FROM ai_jobs")?.double("p") == 7.5)
+    }
+}

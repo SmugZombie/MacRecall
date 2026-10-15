@@ -186,6 +186,28 @@ public struct JobRecord: Sendable, Identifiable, Hashable {
     public var createdAt: Date
     public var nextAttemptAt: Date
     public var completedAt: Date?
+    /// When the latest attempt started.
+    public var startedAt: Date?
+    /// Processing time of all finished attempts (excludes time spent waiting in the queue).
+    public var processingSeconds: Double
+
+    /// Total processing time; for a running job, includes the attempt in progress.
+    public func totalProcessingTime(now: Date = Date()) -> TimeInterval? {
+        switch status {
+        case .running:
+            guard let startedAt else { return nil }
+            return processingSeconds + max(0, now.timeIntervalSince(startedAt))
+        case .done, .failed:
+            return startedAt == nil && processingSeconds == 0 ? nil : processingSeconds
+        default:
+            return processingSeconds > 0 ? processingSeconds : nil
+        }
+    }
+
+    /// Time between being queued and the latest attempt starting.
+    public var queueWait: TimeInterval? {
+        startedAt.map { max(0, $0.timeIntervalSince(createdAt)) }
+    }
 }
 
 public struct DailySummaryRecord: Sendable, Hashable {

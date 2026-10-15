@@ -6,6 +6,7 @@ enum Migrations {
     static let all: [(version: Int, sql: String)] = [
         (1, v1),
         (2, v2),
+        (3, v3),
     ]
 
     static func migrate(_ db: SQLiteDatabase) throws {
@@ -51,6 +52,13 @@ enum Migrations {
     CREATE TRIGGER sessions_project_reindexes_captures AFTER UPDATE OF project_id ON sessions BEGIN
         UPDATE captures SET project_id = project_id WHERE activity_session_id = new.id;
     END;
+    """
+
+    /// Processing time summed across every attempt of a job (started_at only covers the latest one).
+    static let v3 = """
+    ALTER TABLE ai_jobs ADD COLUMN processing_seconds REAL NOT NULL DEFAULT 0;
+    UPDATE ai_jobs SET processing_seconds = MAX(0, completed_at - started_at)
+        WHERE completed_at IS NOT NULL AND started_at IS NOT NULL;
     """
 
     static let v1 = """

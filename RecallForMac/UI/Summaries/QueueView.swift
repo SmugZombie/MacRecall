@@ -72,6 +72,7 @@ struct QueueView: View {
                 TableColumn("Priority") { Text("\($0.priority)").monospacedDigit() }.width(60)
                 TableColumn("Attempts") { Text("\($0.attempts)").monospacedDigit() }.width(60)
                 TableColumn("Created") { Text($0.createdAt.formatted(date: .omitted, time: .standard)) }
+                TableColumn("Duration") { job in JobDurationText(job: job) }.width(min: 70, ideal: 80)
                 TableColumn("Error") { Text($0.lastError ?? "").foregroundStyle(.secondary).lineLimit(1).help($0.lastError ?? "") }
             }
             .contextMenu(forSelectionType: JobRecord.ID.self) { ids in
@@ -136,6 +137,7 @@ struct QueueView: View {
                 Button("Copy Error") { copy(job.lastError ?? "") }.disabled(job.lastError == nil)
                 Button("Retry") { retry(job) }.disabled(job.status != .failed)
             }
+            Text(timing(job)).font(.caption).foregroundStyle(.secondary)
             ScrollView {
                 Text(job.lastError ?? "No error recorded.")
                     .font(.system(.callout, design: .monospaced))
@@ -146,6 +148,16 @@ struct QueueView: View {
             .frame(maxHeight: 110)
         }
         .padding(16)
+    }
+
+    private func timing(_ job: JobRecord) -> String {
+        var parts = ["Queued \(job.createdAt.formatted(date: .abbreviated, time: .standard))"]
+        if let wait = job.queueWait { parts.append("waited \(JobDurationText.format(wait))") }
+        if let total = job.totalProcessingTime() {
+            parts.append("processing \(JobDurationText.format(total))" + (job.attempts > 1 ? " across \(job.attempts) attempts" : ""))
+        }
+        if let done = job.completedAt { parts.append("finished \(done.formatted(date: .omitted, time: .standard))") }
+        return parts.joined(separator: " · ")
     }
 
     private func copy(_ text: String) {
@@ -174,6 +186,35 @@ struct QueueView: View {
         case .done: return .green
         case .failed: return .red
         case .skipped: return .secondary
+        }
+    }
+}
+
+/// Total processing time for a job; ticks once a second while it runs.
+struct JobDurationText: View {
+    let job: JobRecord
+
+    var body: some View {
+        if job.status == .running {
+            // Qualified: this app has its own TimelineView (the history timeline).
+            SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
+                Text(job.totalProcessingTime(now: context.date).map(Self.format) ?? "—")
+                    .monospacedDigit().foregroundStyle(.blue)
+            }
+        } else {
+            Text(job.totalProcessingTime().map(Self.format) ?? "—")
+                .monospacedDigit()
+                .foregroundStyle(job.totalProcessingTime() == nil ? .tertiary : .primary)
+                .help(job.queueWait.map { "Waited \(Self.format($0)) in the queue before processing" } ?? "")
+        }
+    }
+
+    static func format(_ seconds: TimeInterval) -> String {
+        switch seconds {
+        case ..<10: return String(format: "%.1f s", seconds)
+        case ..<60: return "\(Int(seconds.rounded())) s"
+        case ..<3600: return "\(Int(seconds) / 60)m \(String(format: "%02d", Int(seconds) % 60))s"
+        default: return "\(Int(seconds) / 3600)h \(String(format: "%02d", Int(seconds) % 3600 / 60))m"
         }
     }
 }
