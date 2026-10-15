@@ -12,7 +12,7 @@ struct OnboardingView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack(spacing: 12) {
-                Image(systemName: "clock.arrow.circlepath").font(.system(size: 40)).foregroundStyle(.tint)
+                Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 64, height: 64)
                 VStack(alignment: .leading) {
                     Text("Welcome to Recall").font(.title.bold())
                     Text("A private, searchable history of what you worked on — stored only on this Mac.")

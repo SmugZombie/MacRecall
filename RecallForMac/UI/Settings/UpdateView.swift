@@ -1,3 +1,4 @@
+import AppKit
 import RecallCore
 import SwiftUI
 
@@ -9,7 +10,7 @@ struct UpdateView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 12) {
-                Image(systemName: "arrow.down.app").font(.system(size: 36)).foregroundStyle(.tint)
+                Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 56, height: 56)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title).font(.title2.bold())
                     Text("You have \(updates.currentVersion).").foregroundStyle(.secondary)
