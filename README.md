@@ -191,6 +191,6 @@ Jobs live in the `ai_jobs` table with a partial unique index so a pending/runnin
 - **Notes are keyword-searched only**; they aren't embedded for semantic search.
 - **Cloud providers are tested against recorded request/response shapes and the AWS SigV4 test vectors, not live accounts.** Verify with your own OpenAI key / AWS account.
 - With ad hoc signing, macOS may ask again for keychain access after each rebuild.
-- **Notarization**: releases from 1.1.6 are signed with a Developer ID, notarized and stapled. Builds you make yourself aren't, so macOS may ask before opening them.
+- **Notarization**: every new release is signed with a Developer ID, notarized by Apple and stapled. Builds you make yourself aren't, so macOS may ask before opening them.
 - Project suggestions are rule-based: names the AI saw on screen plus repository folders (`~/Github/<name>`, `~/src/<name>`, …) that recur in unassigned activity. Different names for one project (e.g. an app and its repo) appear as separate suggestions.
 - On macOS 15+, the OS periodically re-asks the user to confirm continued screen recording for apps using ScreenCaptureKit. That is system behavior and can't be suppressed.
