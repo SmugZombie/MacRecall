@@ -477,6 +477,13 @@ final class AppState: ObservableObject {
         let name = s.aiProvider.displayName
         let destination = s.aiDestination
         let result: (ok: Bool, message: String)
+        if s.aiProvider == .appleIntelligence {
+            // Nothing to connect to: the model is part of macOS.
+            let reason = AppleIntelligenceProvider.unavailabilityReason
+            await queue?.checkHealth()
+            refreshQueue()
+            return reason.map { (false, $0) } ?? (true, "Apple Intelligence is ready. Summaries, answers and search run on this Mac.")
+        }
         do {
             let models = try await ai.listModels()
             if models.isEmpty {
@@ -485,6 +492,7 @@ final class AppState: ObservableObject {
                 case .ollama: hint = " Install one with e.g. `ollama pull llama3.2`."
                 case .lmStudio: hint = " Download and load a model in LM Studio."
                 case .bedrock: hint = " Request model access in the Bedrock console for \(s.bedrockRegion)."
+                case .appleIntelligence: hint = ""
                 case .openAI: hint = ""
                 }
                 result = (true, "Connected to \(name) at \(destination), but no models are available.\(hint)")
@@ -499,6 +507,8 @@ final class AppState: ObservableObject {
                 result = (false, "No Ollama server is responding at \(destination). Install Ollama from ollama.com and start it (or run `ollama serve`), then check again — or choose another provider in Settings → AI.")
             case .lmStudio:
                 result = (false, "LM Studio isn't responding at \(destination). In LM Studio, open the Developer tab and start the local server, then check again.")
+            case .appleIntelligence:
+                result = (false, AppleIntelligenceProvider.unavailabilityReason ?? "Apple Intelligence isn't available right now.")
             case .openAI, .bedrock:
                 result = (false, "Couldn't reach \(name) at \(destination). Check your internet connection.")
             }

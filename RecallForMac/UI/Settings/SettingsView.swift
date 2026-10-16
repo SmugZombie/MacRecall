@@ -228,6 +228,7 @@ private struct AISettings: View {
                 Text(providerBlurb).font(.caption).foregroundStyle(.secondary)
             }
             if state.settings.providerIsRemote { approvalSection }
+            if provider == .appleIntelligence { appleIntelligenceLimits }
             connectionSection
             modelsSection
             Section("Processing") {
@@ -257,7 +258,40 @@ private struct AISettings: View {
         case .lmStudio: return "Runs models locally with LM Studio's OpenAI-compatible server (Developer tab → Start Server)."
         case .openAI: return "OpenAI's API, or any OpenAI-compatible service via a custom base URL. Requires an API key."
         case .bedrock: return "Amazon Bedrock in your AWS account. Authenticate with a Bedrock API key, IAM access keys, or an AWS CLI profile (including SSO)."
+        case .appleIntelligence: return "Apple's on-device model, built into macOS 26. Nothing leaves this Mac, there's nothing to install or pay for, and no approval is needed."
         }
+    }
+
+    // MARK: Apple Intelligence
+
+    private var appleIntelligenceLimits: some View {
+        Section {
+            limit("eye.slash", "No screenshot vision",
+                  "The model can't read images. Screenshots are described from their recognized text and window title, so charts, photos, designs and anything OCR misses aren't described.")
+            limit("text.badge.minus", "Short memory",
+                  "It reads about 4,000 tokens at a time (roughly 10 pages of text). Long screens, busy sessions, full days and Ask questions with many results are shortened in the middle to fit.")
+            limit("gauge.with.dots.needle.33percent", "A small model",
+                  "Summaries and answers are plainer and more often miss nuance than with large local models or cloud models such as OpenAI's or Bedrock's.")
+            limit("magnifyingglass", "Simpler semantic search",
+                  "Search uses Apple's NaturalLanguage embeddings, which find related wording less reliably than dedicated embedding models, and work best for languages written in the Latin alphabet. After switching, use Re-embed History so older activity is searchable.")
+            limit("hand.raised", "Safety guardrails",
+                  "Apple's model can decline some content. Those screenshots or sessions are marked failed and skipped, not retried.")
+            limit("checkmark.shield", "Requirements",
+                  "macOS 26 Tahoe or later on Apple silicon, with Apple Intelligence turned on in System Settings and a supported language.")
+        } header: {
+            Text("Compared with other providers")
+        } footer: {
+            Text("You can switch providers at any time; each provider keeps its own model choices and search index.")
+        }
+    }
+
+    private func limit(_ symbol: String, _ title: String, _ detail: String) -> some View {
+        Label {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                Text(detail).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+        } icon: { Image(systemName: symbol).foregroundStyle(.secondary) }
     }
 
     // MARK: Remote approval
@@ -294,6 +328,12 @@ private struct AISettings: View {
             case .openAI:
                 TextField("Base URL", text: $endpoint, prompt: Text(OpenAICompatibleProvider.defaultOpenAIEndpoint))
                 SecureField("API key", text: $apiKey, prompt: Text("sk-…"))
+            case .appleIntelligence:
+                if let reason = AppleIntelligenceProvider.unavailabilityReason {
+                    Label(reason, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                } else {
+                    Label("Ready on this Mac", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                }
             case .bedrock:
                 TextField("Region", text: $region, prompt: Text("us-east-1"))
                 Picker("Authentication", selection: $authMode) {
@@ -313,7 +353,7 @@ private struct AISettings: View {
                 }
             }
             HStack {
-                Button("Save & Test") { apply() }.keyboardShortcut(.defaultAction)
+                Button(provider == .appleIntelligence ? "Check Again" : "Save & Test") { apply() }.keyboardShortcut(.defaultAction)
                 if testing { ProgressView().controlSize(.small) }
                 Spacer()
             }
@@ -334,8 +374,14 @@ private struct AISettings: View {
 
     private var modelsSection: some View {
         Section("Models") {
-            ModelField(title: "Vision", selection: $state.settings.visionModel, models: models, capability: .vision,
-                       help: "Describes screenshots. Without one, the summary model analyzes recognized text only.")
+            if provider == .appleIntelligence {
+                LabeledContent("Vision") { Text("Not available").foregroundStyle(.secondary) }
+                Text("Apple's model reads text only, so the summary model describes screenshots from their recognized text.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                ModelField(title: "Vision", selection: $state.settings.visionModel, models: models, capability: .vision,
+                           help: "Describes screenshots. Without one, the summary model analyzes recognized text only.")
+            }
             ModelField(title: "Summary", selection: $state.settings.summaryModel, models: models, capability: .completion,
                        help: "Session titles, daily overviews and answers to questions.")
             ModelField(title: "Embedding", selection: $state.settings.embeddingModel, models: models, capability: .embedding,
@@ -350,6 +396,7 @@ private struct AISettings: View {
         case .lmStudio: return "Download models in LM Studio. A vision-capable (VLM) model can serve as both vision and summary model."
         case .openAI: return "A vision-capable chat model can serve as both vision and summary model; use a text-embedding model for search."
         case .bedrock: return "Many current models must be invoked through an inference profile ID (e.g. one starting with “us.” or “global.”). Embeddings support Amazon Titan Text Embeddings and Cohere Embed. Model access must be enabled in the Bedrock console."
+        case .appleIntelligence: return "Apple Intelligence has one text model (\(AppleIntelligenceProvider.languageModel)) and uses Apple's NaturalLanguage embeddings (\(AppleIntelligenceProvider.embeddingModel)); both are selected for you. Clear one to stop that kind of processing."
         }
     }
 
@@ -369,12 +416,13 @@ private struct AISettings: View {
             accessKeyID = Keychain.get(.awsAccessKeyID) ?? ""
             secretAccessKey = Keychain.get(.awsSecretAccessKey) ?? ""
             sessionToken = Keychain.get(.awsSessionToken) ?? ""
+        case .appleIntelligence: break
         }
     }
 
     private func apply() {
         let trimmedEndpoint = endpoint.trimmingCharacters(in: .whitespaces)
-        if provider != .bedrock {
+        if provider != .bedrock && provider != .appleIntelligence {
             guard let url = URL(string: trimmedEndpoint), url.scheme == "http" || url.scheme == "https", url.host != nil else {
                 connection = (false, "Enter a full URL, e.g. \(provider == .ollama ? "http://127.0.0.1:11434" : OpenAICompatibleProvider.defaultLMStudioEndpoint)")
                 return
@@ -402,6 +450,7 @@ private struct AISettings: View {
                 Keychain.set(sessionToken.trimmingCharacters(in: .whitespacesAndNewlines), for: .awsSessionToken)
             case .profile: break
             }
+        case .appleIntelligence: break
         }
         state.credentialsChanged()
         Task { await test() }

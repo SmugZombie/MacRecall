@@ -37,10 +37,17 @@ Choose a provider in **Settings → AI**, then pick three models: **vision** (de
 | Ollama | This Mac | `ollama pull qwen2.5vl`, `ollama pull llama3.2`, `ollama pull nomic-embed-text` |
 | LM Studio | This Mac | Load models, then Developer tab → Start Server (default `http://127.0.0.1:1234/v1`) |
 | OpenAI | Cloud | API key. The base URL can point at any OpenAI-compatible service |
+| Apple Intelligence | This Mac | Nothing to install: macOS 26 on Apple silicon with Apple Intelligence turned on. Models are chosen for you |
 | Amazon Bedrock | Cloud (your AWS account) | Region plus a Bedrock API key, IAM access keys, or an AWS CLI profile (SSO and other profile types are resolved with `aws configure export-credentials`) |
 
 - API keys and AWS secrets are stored in the login keychain.
 - **Remote destinations need approval.** Anything not on this Mac (OpenAI, Bedrock, or Ollama/LM Studio at a non-loopback address) gets no data until you approve that exact destination in Settings → AI. Changing the endpoint or Bedrock region requires a new approval. Cloud analysis is billed per request, and a screenshot every 30 s adds up.
+- **Apple Intelligence** uses Apple's on-device model (Foundation Models) for summaries, titles and Ask, and Apple's NaturalLanguage embeddings for semantic search. It's private and free, but it has limits that Settings → AI lists when you choose it:
+  - It can't read images, so screenshots are described from their recognized text and window title.
+  - Its context is about 4,000 tokens; long prompts are shortened in the middle to fit.
+  - It's a small model, so summaries are plainer than with larger models.
+  - Its embeddings are weaker than dedicated embedding models and work best for Latin-alphabet languages.
+  - Its safety guardrails can decline some content, which is then skipped.
 - **Bedrock:** many current models must be invoked through an **inference profile ID** (e.g. `us.…` / `global.…`). Recall lists both on-demand models and inference profiles. JSON output is enforced with forced tool use, falling back to prompt instructions for models that don't support it. Embeddings support Amazon Titan Text Embeddings and Cohere Embed.
 - Recall never downloads models itself.
 - If the provider is offline or rejects credentials, AI jobs wait in the durable queue without using up retries. Capture, OCR, the timeline and keyword search keep working.
@@ -122,8 +129,9 @@ Packages/RecallCore/          All logic, unit-tested with `swift test`
                               CaptureCoordinator, image encoding + perceptual dedupe
   Monitoring/                 App activation, lock/unlock, sleep/wake, idle, battery, secure input
   OCR/                        Apple Vision text recognition
-  AI/                         AIProvider protocol; Ollama, OpenAI-compatible (OpenAI, LM Studio) and Bedrock
-                              (Converse + SigV4, no AWS SDK) providers; output validation; job queue
+  AI/                         AIProvider protocol; Ollama, OpenAI-compatible (OpenAI, LM Studio), Bedrock
+                              (Converse + SigV4, no AWS SDK) and Apple Intelligence (Foundation Models +
+                              NaturalLanguage) providers; output validation; job queue
   Activity/                   Deterministic SessionBuilder, ProjectClassifier, ProjectSuggester, daily summaries
   Search/                     Query interpretation, FTS5 search, vector index, hybrid RRF, grounded Q&A
   Privacy/                    CapturePolicy, sensitive-content redaction, retention

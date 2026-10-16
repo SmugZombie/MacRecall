@@ -163,6 +163,14 @@ public struct ModelSelection: Codable, Sendable, Equatable {
         self.summary = summary
         self.embedding = embedding
     }
+
+    /// Apple Intelligence has exactly one text model and one embedding model, so they're chosen up front.
+    /// It reads no images, so there's no vision model.
+    public static func defaults(for provider: AIProviderKind) -> ModelSelection {
+        provider == .appleIntelligence
+            ? ModelSelection(summary: AppleIntelligenceProvider.languageModel, embedding: AppleIntelligenceProvider.embeddingModel)
+            : ModelSelection()
+    }
 }
 
 public enum BedrockAuthMode: String, Codable, Sendable, CaseIterable, Identifiable {
@@ -179,7 +187,7 @@ public enum BedrockAuthMode: String, Codable, Sendable, CaseIterable, Identifiab
 
 extension RecallSettings {
     private var selection: ModelSelection {
-        get { providerModels[aiProvider.rawValue] ?? ModelSelection() }
+        get { providerModels[aiProvider.rawValue] ?? ModelSelection.defaults(for: aiProvider) }
         set { providerModels[aiProvider.rawValue] = newValue }
     }
 
@@ -211,6 +219,7 @@ extension RecallSettings {
         case .lmStudio: return lmStudioEndpoint
         case .openAI: return openAIEndpoint
         case .bedrock: return "Amazon Bedrock (\(bedrockRegion))"
+        case .appleIntelligence: return "Apple Intelligence on this Mac"
         }
     }
 
@@ -230,6 +239,7 @@ extension RecallSettings {
         case .ollama: return !OllamaEndpoint.isLoopback(ollamaEndpoint)
         case .lmStudio: return !OllamaEndpoint.isLoopback(lmStudioEndpoint)
         case .openAI, .bedrock: return true
+        case .appleIntelligence: return false
         }
     }
 

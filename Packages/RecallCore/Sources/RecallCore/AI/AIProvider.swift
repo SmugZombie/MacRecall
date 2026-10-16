@@ -1,7 +1,7 @@
 import Foundation
 
 public enum AIProviderKind: String, Codable, Sendable, CaseIterable, Identifiable {
-    case ollama, lmStudio, openAI, bedrock
+    case ollama, lmStudio, openAI, bedrock, appleIntelligence
 
     public var id: String { rawValue }
 
@@ -11,6 +11,7 @@ public enum AIProviderKind: String, Codable, Sendable, CaseIterable, Identifiabl
         case .lmStudio: return "LM Studio"
         case .openAI: return "OpenAI"
         case .bedrock: return "Amazon Bedrock"
+        case .appleIntelligence: return "Apple Intelligence"
         }
     }
 
@@ -59,7 +60,7 @@ public struct ChatMessage: Sendable {
 }
 
 /// A source of chat completions and embeddings. Implementations: Ollama, OpenAI-compatible
-/// (OpenAI, LM Studio) and Amazon Bedrock. All network traffic for AI goes through one of these.
+/// (OpenAI, LM Studio), Amazon Bedrock and Apple Intelligence (on-device). All network traffic for AI goes through one of these.
 public protocol AIProvider: Sendable {
     var kind: AIProviderKind { get }
     func listModels() async throws -> [AIModel]

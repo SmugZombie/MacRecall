@@ -21,6 +21,8 @@ extension RecallSettings {
             case .profile: auth = .profile(bedrockProfile)
             }
             return BedrockProvider(region: bedrockRegion, auth: auth, timeout: requestTimeout)
+        case .appleIntelligence:
+            return AppleIntelligenceProvider()
         }
     }
 }
