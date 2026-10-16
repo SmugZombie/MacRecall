@@ -50,9 +50,12 @@ struct MainView: View {
             .navigationSplitViewColumnWidth(min: 200, ideal: 230)
             .safeAreaInset(edge: .bottom) { statusFooter }
         } detail: {
-            // A detail view must never dictate the window's minimum height: if one reports a large
-            // minimum, SwiftUI lays the split view out taller than the window and both columns shift off-screen.
-            detail.frame(minHeight: 0, maxHeight: .infinity)
+            // A detail view must never dictate the window's minimum size. If one reports a large minimum
+            // height, SwiftUI lays the split view out taller than the window and both columns shift off-screen;
+            // if its minimum keeps changing during a layout pass (rows, the inspector and loaded images all
+            // resize while navigating), AppKit's constraint pass never settles and it aborts the app
+            // ("more Update Constraints in Window passes than there are views"), seen on macOS 27.
+            detail.frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
         }
         .onAppear { consumeNavigation() }
         .onChange(of: nav.section) { consumeNavigation() }

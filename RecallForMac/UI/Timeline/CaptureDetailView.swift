@@ -39,6 +39,8 @@ struct CaptureDetailView: View {
                 ProgressView().padding(40)
             }
         }
+        // The inspector column's size comes from inspectorColumnWidth, never from the capture's content.
+        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
         .task(id: "\(captureID)-\(state.revision)") { load() }
         .sheet(item: $viewing) { capture in
             ScreenshotViewer(capture: capture) { exportScreenshot(capture) }

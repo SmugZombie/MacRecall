@@ -30,12 +30,12 @@ struct SearchView: View {
                                         set: { if !$0 { selectedCaptureID = nil; selectedNoteID = nil } })) {
             if let id = selectedNoteID {
                 NoteDetailView(noteID: id, onClose: { selectedNoteID = nil; fieldFocused = true })
-                    .inspectorColumnWidth(min: 380, ideal: 520, max: 900)
+                    .inspectorColumnWidth(min: 320, ideal: 480, max: 900)
             } else if let id = selectedCaptureID {
                 CaptureDetailView(captureID: id, sequence: results?.captures.map(\.id),
                                   onClose: { selectedCaptureID = nil; fieldFocused = true },
                                   onSelect: { selectedCaptureID = $0 })
-                    .inspectorColumnWidth(min: 380, ideal: 520, max: 900)
+                    .inspectorColumnWidth(min: 320, ideal: 480, max: 900)
             }
         }
         .onChange(of: selectedCaptureID) { if selectedCaptureID != nil { selectedNoteID = nil } }

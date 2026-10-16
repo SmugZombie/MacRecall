@@ -148,6 +148,8 @@ struct NoteDetailView: View {
                 ContentUnavailableView("Note deleted", systemImage: "note.text")
             }
         }
+        // The inspector column's size comes from inspectorColumnWidth, never from the note's content.
+        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
         .task(id: "\(noteID)-\(state.revision)") { note = try? state.store?.note(id: noteID) }
         .sheet(item: $editing) { note in EditNoteSheet(note: note) }
         .confirmationDialog("Delete this note?", isPresented: $confirmDelete) {
@@ -249,7 +251,7 @@ struct NotesView: View {
         .inspector(isPresented: Binding(get: { selectedNoteID != nil }, set: { if !$0 { selectedNoteID = nil } })) {
             if let id = selectedNoteID {
                 NoteDetailView(noteID: id, onClose: { selectedNoteID = nil })
-                    .inspectorColumnWidth(min: 340, ideal: 460, max: 800)
+                    .inspectorColumnWidth(min: 320, ideal: 460, max: 800)
             }
         }
         .sheet(item: $editing) { EditNoteSheet(note: $0) }
