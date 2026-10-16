@@ -35,6 +35,8 @@ public struct CaptureRecord: Sendable, Identifiable, Hashable {
     public var projectID: Int64?
     public var sessionID: Int64?
     public var redacted: Bool
+    /// What caused the capture; nil for captures stored before this was recorded.
+    public var trigger: CaptureTrigger? = nil
 }
 
 public struct CaptureMark: Sendable, Identifiable, Hashable {

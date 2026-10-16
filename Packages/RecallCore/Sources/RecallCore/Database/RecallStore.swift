@@ -171,7 +171,10 @@ public final class RecallStore: @unchecked Sendable {
             aiJSON: row.string("ai_json"),
             projectID: row.int("project_id"),
             sessionID: row.int("activity_session_id"),
-            redacted: row.bool("redacted"))
+            redacted: row.bool("redacted"),
+            trigger: (row.string("metadata_json")?.data(using: .utf8))
+                .flatMap { try? JSONDecoder().decode([String: String].self, from: $0) }?["trigger"]
+                .flatMap(CaptureTrigger.init(rawValue:)))
     }
 
     @discardableResult

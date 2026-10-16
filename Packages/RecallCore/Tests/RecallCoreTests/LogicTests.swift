@@ -365,3 +365,35 @@ import Testing
         #expect(try store.projectSuggestions().isEmpty)
     }
 }
+
+@Suite struct ClipboardTests {
+    @Test func screenClippingIsBarePNG() {
+        // What ⌃⇧⌘4 leaves on the clipboard (observed on macOS 26).
+        #expect(ClipboardImageKind.classify(items: [["public.png", "com.apple.is-remote-clipboard"]]) == .screenClipping)
+        #expect(ClipboardImageKind.classify(items: [["public.png"]]) == .screenClipping)
+    }
+
+    @Test func appCopiesAreCopiedImages() {
+        // Preview: PNG plus TIFF and private types.
+        #expect(ClipboardImageKind.classify(items: [["public.png", "Apple PNG pasteboard type", "PVPboardInfoPboardType",
+                                                     "com.apple.is-remote-clipboard", "public.tiff"]]) == .copiedImage)
+        #expect(ClipboardImageKind.classify(items: [["public.tiff", "public.html", "public.url"]]) == .copiedImage)
+        #expect(ClipboardImageKind.classify(items: [["public.png"], ["public.png"]]) == .copiedImage)
+        #expect(ClipboardImageKind.classify(items: [["public.png", "com.apple.is-remote-clipboard"]], remoteFlag: Data([1])) == .copiedImage)
+    }
+
+    @Test func ignoresNonImagesAndPrivateContent() {
+        #expect(ClipboardImageKind.classify(items: [["public.utf8-plain-text", "public.html"]]) == nil)
+        #expect(ClipboardImageKind.classify(items: [["public.file-url", "public.utf8-plain-text"]]) == nil)
+        #expect(ClipboardImageKind.classify(items: [["public.png", "org.nspasteboard.ConcealedType"]]) == nil)
+        #expect(ClipboardImageKind.classify(items: []) == nil)
+    }
+
+    @Test func settingsDefaultOffAndDecodeMissingKeys() throws {
+        let decoded = try JSONDecoder().decode(RecallSettings.self, from: Data("{}".utf8))
+        #expect(decoded.clipboardImageKinds.isEmpty)
+        var s = RecallSettings()
+        s.captureScreenClippings = true
+        #expect(s.clipboardImageKinds == [.screenClipping])
+    }
+}

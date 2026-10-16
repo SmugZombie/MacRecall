@@ -44,6 +44,7 @@ final class AppState: ObservableObject {
     private(set) var coordinator: CaptureCoordinator?
     private(set) var queue: AIJobQueue?
     let monitor = SystemStateMonitor()
+    private let clipboard = ClipboardWatcher()
 
     @Published var settings: RecallSettings {
         didSet { if settings != oldValue { settingsChanged(from: oldValue) } }
@@ -124,6 +125,11 @@ final class AppState: ObservableObject {
             if settings.recordingEnabled { await coordinator.start() }
         }
 
+        clipboard.onImage = { image, kind in
+            Task { await AppState.shared.coordinator?.captureClipboardImage(image, kind: kind) }
+        }
+        clipboard.watch(settings.clipboardImageKinds)
+
         monitor.idleTimeout = settings.idleTimeout
         monitor.onEvent = { [weak self] event in self?.handle(event) }
         monitor.start()
@@ -154,6 +160,7 @@ final class AppState: ObservableObject {
     func shutdown() {
         AttachmentFiles.cleanUp()
         timers.forEach { $0.invalidate() }
+        clipboard.watch([])
         monitor.stop()
         let coordinator = coordinator, queue = queue
         Task {
@@ -168,6 +175,7 @@ final class AppState: ObservableObject {
         settings.save()
         settingsBox?.value = settings
         monitor.idleTimeout = settings.idleTimeout
+        if coordinator != nil { clipboard.watch(settings.clipboardImageKinds) }
         let s = settings
         if old.providerConfiguration != s.providerConfiguration { ai.replace(with: s.makeProvider()) }
         Task {

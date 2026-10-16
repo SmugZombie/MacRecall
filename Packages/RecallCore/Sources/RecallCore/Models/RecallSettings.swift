@@ -15,6 +15,10 @@ public struct RecallSettings: Codable, Sendable, Equatable {
     public var idleTimeout: Double = 300
     public var pauseOnBattery = false
     public var captureCursor = false
+    /// Store screen clippings (⌃⇧⌘4 and friends) taken to the clipboard as captures.
+    public var captureScreenClippings = false
+    /// Store images copied from apps (Copy Image, ⌘C in Preview) as captures.
+    public var captureCopiedImages = false
 
     // Privacy
     public var excludedBundleIdentifiers: [String] = RecallSettings.defaultExclusions
@@ -99,6 +103,8 @@ public struct RecallSettings: Codable, Sendable, Equatable {
         idleTimeout = v(.idleTimeout, d.idleTimeout)
         pauseOnBattery = v(.pauseOnBattery, d.pauseOnBattery)
         captureCursor = v(.captureCursor, d.captureCursor)
+        captureScreenClippings = v(.captureScreenClippings, d.captureScreenClippings)
+        captureCopiedImages = v(.captureCopiedImages, d.captureCopiedImages)
         excludedBundleIdentifiers = v(.excludedBundleIdentifiers, d.excludedBundleIdentifiers)
         retentionDays = v(.retentionDays, d.retentionDays)
         automaticCleanup = v(.automaticCleanup, d.automaticCleanup)
@@ -242,6 +248,14 @@ extension RecallSettings {
         case .openAI, .bedrock: return true
         case .appleIntelligence: return false
         }
+    }
+
+    /// Which clipboard images to store as captures.
+    public var clipboardImageKinds: Set<ClipboardImageKind> {
+        var kinds: Set<ClipboardImageKind> = []
+        if captureScreenClippings { kinds.insert(.screenClipping) }
+        if captureCopiedImages { kinds.insert(.copiedImage) }
+        return kinds
     }
 
     public var remoteTargetKey: String { "\(aiProvider.rawValue)|\(aiDestination)" }

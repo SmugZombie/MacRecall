@@ -55,6 +55,18 @@ private struct CaptureSettings: View {
                 }
                 Toggle("Include mouse cursor", isOn: $state.settings.captureCursor)
             }
+            Section("Clipboard") {
+                Toggle(isOn: $state.settings.captureScreenClippings) {
+                    Text("Save screen clippings")
+                    Text("Stores screenshots you take to the clipboard (⌃⇧⌘4, or ⌃⇧⌘3 for the whole screen).")
+                }
+                Toggle(isOn: $state.settings.captureCopiedImages) {
+                    Text("Save copied images")
+                    Text("Stores images you copy from apps, such as Copy Image in a browser or ⌘C in Preview.")
+                }
+                Text("Saved images are attributed to the app in front when you copied them, and are read, redacted and analyzed like other screenshots. Nothing is saved while recording is paused or when the app in front is excluded.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
             Section("Activity") {
                 LabeledContent("Idle after") {
                     Picker("", selection: $state.settings.idleTimeout) {

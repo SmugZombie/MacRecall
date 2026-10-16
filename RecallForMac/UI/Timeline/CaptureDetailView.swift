@@ -142,7 +142,12 @@ struct CaptureDetailView: View {
                 Text(c.windowTitle).font(.callout).textSelection(.enabled)
             }
             let seen = c.lastSeenAt.timeIntervalSince(c.capturedAt)
-            Text("\(c.width)×\(c.height)" + (seen > 1 ? " · unchanged for \(formatDuration(seen))" : ""))
+            let source = switch c.trigger {
+            case .screenClipping: "Screen clipping · "
+            case .copiedImage: "Copied image · "
+            default: ""
+            }
+            Text(source + "\(c.width)×\(c.height)" + (seen > 1 ? " · unchanged for \(formatDuration(seen))" : ""))
                 .font(.caption).foregroundStyle(.secondary)
         }
     }

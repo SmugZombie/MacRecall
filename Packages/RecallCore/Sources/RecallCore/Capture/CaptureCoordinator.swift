@@ -3,7 +3,34 @@ import Foundation
 import os
 
 public enum CaptureTrigger: String, Sendable {
-    case timer, appActivated, windowChanged, manual
+    case timer, appActivated, windowChanged, manual, screenClipping, copiedImage
+}
+
+/// The app and window a stored image is attributed to.
+struct CaptureSource {
+    var bundleIdentifier: String
+    var applicationName: String
+    var pid: pid_t
+    var windowID: CGWindowID
+    var title: String
+    var frame: CGRect
+    var matchMethod: String
+
+    init(_ window: ResolvedWindow) {
+        self.init(bundleIdentifier: window.bundleIdentifier, applicationName: window.applicationName, pid: window.pid,
+                  windowID: window.windowID, title: window.title, frame: window.frame, matchMethod: window.matchMethod)
+    }
+
+    init(bundleIdentifier: String, applicationName: String, pid: pid_t, windowID: CGWindowID, title: String,
+         frame: CGRect, matchMethod: String) {
+        self.bundleIdentifier = bundleIdentifier
+        self.applicationName = applicationName
+        self.pid = pid
+        self.windowID = windowID
+        self.title = title
+        self.frame = frame
+        self.matchMethod = matchMethod
+    }
 }
 
 public enum CaptureOutcome: Sendable, Equatable {
@@ -39,6 +66,8 @@ public actor CaptureCoordinator {
     private var lastFingerprint: ImageFingerprint?
     private var lastCaptureID: Int64?
     private var lastCaptureAt: Date?
+    /// Last image taken from the clipboard, so copying the same picture again doesn't store it twice.
+    private var lastClipboardFingerprint: ImageFingerprint?
 
     public var onCapture: (@Sendable (CaptureOutcome) -> Void)?
 
@@ -178,7 +207,7 @@ public actor CaptureCoordinator {
         if windowKey == lastWindowKey { try? logChange(.contentChanged, window: window, at: now) }
 
         do {
-            let record = try await persist(image: image, window: window, fingerprint: fingerprint, at: now, trigger: trigger)
+            let record = try await persist(image: image, source: CaptureSource(window), fingerprint: fingerprint, at: now, trigger: trigger)
             lastPID = window.pid
             lastWindowKey = windowKey
             lastFingerprint = fingerprint
@@ -195,7 +224,64 @@ public actor CaptureCoordinator {
         }
     }
 
-    private func persist(image: CGImage, window: ResolvedWindow, fingerprint: ImageFingerprint?, at date: Date,
+    /// Stores an image taken from the clipboard (see `ClipboardWatcher`), attributed to the frontmost app.
+    ///
+    /// The same rules as screen capture apply: nothing is stored while recording is paused or the screen is
+    /// locked, or when the frontmost app is excluded. Dedupe state for window captures is left alone.
+    @discardableResult
+    public func captureClipboardImage(_ image: CGImage, kind: ClipboardImageKind) async -> CaptureOutcome {
+        let outcome = await performClipboardCapture(image, kind: kind)
+        onCapture?(outcome)
+        return outcome
+    }
+
+    private func performClipboardCapture(_ image: CGImage, kind: ClipboardImageKind) async -> CaptureOutcome {
+        let trigger: CaptureTrigger = kind == .screenClipping ? .screenClipping : .copiedImage
+        let context = await contextProvider()
+        let policy = CapturePolicy(settings: settings, ownBundleIdentifier: ownBundleIdentifier)
+        if case .skip(let reason) = policy.decide(context) {
+            recordSkip(reason, detail: trigger.rawValue, bundle: context.frontmostBundleIdentifier)
+            return .skipped(reason)
+        }
+        guard let source = await MainActor.run(body: { Self.frontmostSource() }) else { return .skipped(.noFrontmostApplication) }
+        if source.bundleIdentifier == ownBundleIdentifier { return .skipped(.ownApplication) }
+        if settings.excludedBundleIdentifiers.contains(source.bundleIdentifier) {
+            recordSkip(.excludedApplication, detail: trigger.rawValue, bundle: source.bundleIdentifier)
+            return .skipped(.excludedApplication)
+        }
+
+        let scaled = ImageProcessing.resize(image, maxWidth: settings.maxImageWidth, maxHeight: settings.maxImageHeight)
+        let fingerprint = ImageFingerprint(image: scaled)
+        if let fp = fingerprint, let last = lastClipboardFingerprint, fp.isDuplicate(of: last, sensitivity: settings.dedupSensitivity) {
+            return .skipped(.duplicate)
+        }
+        do {
+            let record = try await persist(image: scaled, source: source, fingerprint: fingerprint, at: Date(), trigger: trigger)
+            lastClipboardFingerprint = fingerprint
+            return .captured(record.id)
+        } catch let error as RedactionGate.Unavailable {
+            log.error("Discarded clipboard image: \(error.localizedDescription, privacy: .public)")
+            recordSkip(.redactionFailed, detail: "ocr failed", bundle: source.bundleIdentifier)
+            return .skipped(.redactionFailed)
+        } catch {
+            log.error("Persisting clipboard image failed: \(error.localizedDescription, privacy: .public)")
+            return .failed(error.localizedDescription)
+        }
+    }
+
+    /// The frontmost app and its focused window, without capturing anything.
+    @MainActor
+    static func frontmostSource() -> CaptureSource? {
+        guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
+        let pid = app.processIdentifier
+        let bundle = app.bundleIdentifier ?? "pid.\(pid)"
+        let focused = ActiveWindowResolver.accessibilityTrusted ? ActiveWindowResolver.focusedWindowInfo(pid: pid) : nil
+        return CaptureSource(bundleIdentifier: bundle, applicationName: app.localizedName ?? bundle, pid: pid,
+                             windowID: ActiveWindowResolver.windowZOrder(pid: pid).first ?? 0, title: focused?.title ?? "",
+                             frame: focused?.frame ?? .zero, matchMethod: "clipboard")
+    }
+
+    private func persist(image: CGImage, source window: CaptureSource, fingerprint: ImageFingerprint?, at date: Date,
                          trigger: CaptureTrigger) async throws -> CaptureRecord {
         var finalImage = image
         var ocrText: String?
