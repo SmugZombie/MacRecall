@@ -141,6 +141,15 @@ struct ProcessingBadge: View {
     }
 }
 
+/// Explains what deleting screenshots removes, for confirmation dialogs.
+enum CaptureDeletionText {
+    static func message(count: Int) -> String {
+        (count == 1 ? "The screenshot, its recognized text, AI description and search entries are"
+                    : "These \(count) screenshots, their recognized text, AI descriptions and search entries are")
+            + " permanently deleted. Session and daily summaries that drew on \(count == 1 ? "it" : "them") are rebuilt without \(count == 1 ? "it" : "them"); summaries you wrote yourself are kept."
+    }
+}
+
 extension Date {
     var timeString: String { formatted(date: .omitted, time: .shortened) }
 }

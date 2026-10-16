@@ -18,6 +18,8 @@ struct CaptureDetailView: View {
     @State private var nextID: Int64?
     @State private var position: (index: Int, count: Int)?
     @State private var viewing: CaptureRecord?
+    @State private var confirmDelete = false
+    @State private var loaded = false
 
     var body: some View {
         ScrollView {
@@ -35,6 +37,9 @@ struct CaptureDetailView: View {
                     if related.count > 1 { relatedSection }
                 }
                 .padding(16)
+            } else if loaded {
+                ContentUnavailableView("Screenshot deleted", systemImage: "trash",
+                                       description: Text("It may have been deleted, or removed by retention."))
             } else {
                 ProgressView().padding(40)
             }
@@ -45,9 +50,22 @@ struct CaptureDetailView: View {
         .sheet(item: $viewing) { capture in
             ScreenshotViewer(capture: capture) { exportScreenshot(capture) }
         }
+        .confirmationDialog("Delete this screenshot?", isPresented: $confirmDelete) {
+            Button("Delete Screenshot", role: .destructive) { delete() }
+        } message: {
+            Text(CaptureDeletionText.message(count: 1))
+        }
+    }
+
+    /// Deletes the shown capture, then moves to its neighbor (or closes when there's none).
+    private func delete() {
+        let neighbor = nextID ?? previousID
+        guard state.deleteCaptures([captureID]) != nil else { return }
+        if let neighbor { onSelect(neighbor) } else { onClose?() }
     }
 
     private func load() {
+        defer { loaded = true }
         guard let store = state.store, let c = try? store.capture(id: captureID) else { capture = nil; return }
         capture = c
         session = c.sessionID.flatMap { try? store.session(id: $0) }
@@ -115,6 +133,8 @@ struct CaptureDetailView: View {
                         try? state.store?.enqueueJob(.ocr, entityType: "capture", entityID: c.id, priority: 100)
                         state.refreshQueue()
                     }
+                    Divider()
+                    Button("Delete Screenshot…", role: .destructive) { confirmDelete = true }
                 } label: { Image(systemName: "ellipsis.circle") }
                 .menuStyle(.borderlessButton).fixedSize()
             }

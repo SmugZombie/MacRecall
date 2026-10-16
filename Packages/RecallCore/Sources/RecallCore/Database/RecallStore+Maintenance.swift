@@ -65,6 +65,80 @@ extension RecallStore {
         return removed
     }
 
+    /// What deleting specific captures removed and changed.
+    public struct CaptureDeletion: Sendable, Equatable {
+        public var deletedCaptures = 0
+        /// Sessions left with no captures, removed with their summaries.
+        public var deletedSessions: [Int64] = []
+        /// Sessions that kept other captures; their AI title and summary are rebuilt without the deleted ones.
+        public var updatedSessions: [Int64] = []
+        /// Saved daily summaries (local dates) removed because they were written from the deleted captures.
+        public var clearedDailySummaries: [String] = []
+    }
+
+    /// Deletes these captures and everything derived from them: screenshot and thumbnail files, recognized
+    /// text, AI analysis, search index entries, embeddings and queued jobs. A session left empty is deleted;
+    /// one that keeps other captures has its bounds recomputed, and its AI-written title and summary (which may
+    /// describe the deleted screens) are reset and queued for regeneration. A summary the user wrote is kept.
+    /// Saved daily summaries for the affected days are removed, since they can quote the deleted captures.
+    @discardableResult
+    public func deleteCaptures(ids: [Int64], calendar: Calendar = .current) throws -> CaptureDeletion {
+        var result = CaptureDeletion()
+        guard !ids.isEmpty else { return result }
+        var rows: [Row] = []
+        for start in stride(from: 0, to: ids.count, by: 500) {
+            let chunk = Array(ids[start..<min(ids.count, start + 500)])
+            rows += try db.query("""
+                SELECT id, image_path, thumbnail_path, activity_session_id, captured_at, timezone FROM captures
+                WHERE id IN (\(Array(repeating: "?", count: chunk.count).joined(separator: ",")))
+                """, chunk)
+        }
+        guard !rows.isEmpty else { return result }
+        let sessionIDs = Set(rows.compactMap { $0.int("activity_session_id") })
+        var days: Set<String> = []
+        for row in rows {
+            guard let date = row.date("captured_at") else { continue }
+            var cal = calendar
+            if let tz = row.string("timezone").flatMap(TimeZone.init(identifier:)) { cal.timeZone = tz }
+            days.insert(DailySummaryService.localDateString(DailySummaryService.dayKey(for: date, calendar: cal)))
+        }
+
+        try db.transaction {
+            // Triggers remove each capture's search index entry, embeddings and jobs.
+            for row in rows { try db.run("DELETE FROM captures WHERE id = ?", [row.int("id")!]) }
+            for sid in sessionIDs.sorted() {
+                let remaining = try captures(inSession: sid)
+                if remaining.isEmpty {
+                    try db.run("DELETE FROM sessions WHERE id = ?", [sid])
+                    result.deletedSessions.append(sid)
+                    continue
+                }
+                try recomputeBounds(sessionID: sid)
+                let title = SessionBuilder.deterministicTitle(for: remaining.map(SessionBuilder.Item.init))
+                try db.run("UPDATE sessions SET title = ?, title_source = 'deterministic' WHERE id = ? AND title_source = 'ai'", [title, sid])
+                try db.run("""
+                    UPDATE sessions SET summary = '', summary_source = 'none', classification_confidence = NULL
+                    WHERE id = ? AND summary_source = 'ai'
+                    """, [sid])
+                try db.run("DELETE FROM embeddings WHERE entity_type = 'session' AND entity_id = ?", [sid])
+                try db.run("DELETE FROM ai_jobs WHERE entity_type = 'session' AND entity_id = ? AND status = 'done'", [sid])
+                try enqueueJob(.sessionSummary, entityType: "session", entityID: sid, priority: 60)
+                result.updatedSessions.append(sid)
+            }
+            for day in days.sorted() where try db.run("DELETE FROM daily_summaries WHERE local_date = ?", [day]) > 0 {
+                result.clearedDailySummaries.append(day)
+            }
+        }
+        // Files go after the rows, so a crash never leaves a row pointing at a missing file.
+        for row in rows {
+            for key in ["image_path", "thumbnail_path"] {
+                if let rel = row.string(key), !rel.isEmpty { try? FileManager.default.removeItem(at: paths.absolute(rel)) }
+            }
+        }
+        result.deletedCaptures = rows.count
+        return result
+    }
+
     public func deleteAllHistory() throws {
         try db.transaction {
             for table in ["captures", "sessions", "activity_events", "ai_jobs", "embeddings", "daily_summaries", "windows",

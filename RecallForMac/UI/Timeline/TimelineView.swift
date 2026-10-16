@@ -23,6 +23,7 @@ struct TimelineView: View {
     @State private var selectedNoteID: Int64?
     @State private var editingNote: NoteRecord?
     @State private var deletingNote: NoteRecord?
+    @State private var deletingSession: SessionRecord?
     private let pageSize = 60
 
     var body: some View {
@@ -60,6 +61,15 @@ struct TimelineView: View {
             }
         } message: { _ in
             Text("The note and its attached files will be permanently removed from Recall.")
+        }
+        .confirmationDialog("Delete this session and its screenshots?",
+                            isPresented: Binding(get: { deletingSession != nil }, set: { if !$0 { deletingSession = nil } }),
+                            presenting: deletingSession) { session in
+            Button("Delete \(session.captureCount) Screenshot\(session.captureCount == 1 ? "" : "s")", role: .destructive) {
+                deleteSession(session)
+            }
+        } message: { session in
+            Text(CaptureDeletionText.message(count: session.captureCount) + " The session is removed too.")
         }
         .task(id: TaskKey(range: range, revision: state.revision, app: appFilter, project: projectID)) { await reload() }
         .onChange(of: nav.captureID) { consumeRequestedCapture() }
@@ -199,6 +209,15 @@ struct TimelineView: View {
             try? state.store?.enqueueJob(.sessionSummary, entityType: "session", entityID: session.id, priority: 90)
             state.refreshQueue()
         }
+        Divider()
+        Button("Delete Session and Screenshots…", role: .destructive) { deletingSession = session }
+    }
+
+    private func deleteSession(_ session: SessionRecord) {
+        guard let ids = try? state.store?.captures(inSession: session.id).map(\.id) else { return }
+        if let selected = selectedCaptureID, ids.contains(selected) { selectedCaptureID = nil }
+        expanded.remove(session.id)
+        state.deleteCaptures(ids)
     }
 
     /// Another view (e.g. Processing → Show Screenshot) asked for a capture to be opened.
@@ -252,6 +271,7 @@ struct SessionRow: View {
     var appFilter: String?
     @EnvironmentObject private var state: AppState
     @State private var captures: [CaptureRecord] = []
+    @State private var deleting: CaptureRecord?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -301,12 +321,23 @@ struct SessionRow: View {
                                     _ = try? state.store?.splitSession(id: session.id, at: capture.capturedAt)
                                     state.historyChanged()
                                 }
+                                Divider()
+                                Button("Delete Screenshot…", role: .destructive) { deleting = capture }
                             }
                         }
                     }
                     .padding(.vertical, 4)
                 }
                 .frame(height: 124)
+                .confirmationDialog("Delete this screenshot?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+                                    presenting: deleting) { capture in
+                    Button("Delete Screenshot", role: .destructive) {
+                        if selectedCaptureID == capture.id { selectedCaptureID = nil }
+                        state.deleteCaptures([capture.id])
+                    }
+                } message: { _ in
+                    Text(CaptureDeletionText.message(count: 1))
+                }
                 .task(id: "\(session.id)-\(state.revision)") {
                     let all = (try? state.store?.captures(inSession: session.id)) ?? []
                     captures = appFilter.map { f in all.filter { $0.bundleIdentifier == f } } ?? all

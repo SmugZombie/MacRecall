@@ -60,6 +60,14 @@ Write a note from the menu bar ("Completed work on the importer", "Took lunch fr
 - Attached files are copied into the library as they were when attached, and encrypted like screenshots (up to 100 MB each). **Open** decrypts a copy into a private temporary folder that Recall empties when it starts and quits; **Save As…** exports one.
 - Retention never deletes notes. Delete them individually, or with **Delete All History**.
 
+### Deleting history
+
+- **One screenshot:** choose **Delete Screenshot…** in a screenshot's detail panel (the ⋯ menu), or right-click its thumbnail in the timeline or its row in search results.
+- **A whole session:** right-click the session in the timeline and choose **Delete Session and Screenshots…**.
+- **A time range, the last hour, or everything:** Settings → Privacy → Delete history.
+
+Deleting a screenshot removes its image and thumbnail files, recognized text, AI description, search index entries, embeddings and queued jobs. A session left empty is deleted. Otherwise its AI-written title and summary, which may describe the deleted screen, are reset and regenerated from the remaining screenshots, and that day's saved daily summary is removed. Titles and summaries you wrote yourself are kept.
+
 ### Screenshot encryption
 
 Screenshots and thumbnails are encrypted on disk with AES-GCM (CryptoKit), so other apps can't read them from `Application Support`. The key is created on first launch and kept in the login keychain, which hands it to Recall without asking and prompts for any other app. Each file is bound to its path in the library, and decrypted images only exist in memory. To give another app a copy, use **Export Screenshot…** in a screenshot's detail view.

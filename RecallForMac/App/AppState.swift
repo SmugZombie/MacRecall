@@ -310,6 +310,27 @@ final class AppState: ObservableObject {
         historyChanged()
     }
 
+    /// Deletes screenshots and everything derived from them (see `RecallStore.deleteCaptures(ids:)`).
+    @discardableResult
+    func deleteCaptures(_ ids: [Int64]) -> RecallStore.CaptureDeletion? {
+        guard let store, !ids.isEmpty else { return nil }
+        do {
+            let result = try store.deleteCaptures(ids: ids)
+            // Drop decrypted copies held in memory, and don't treat the next identical screen as a duplicate of a deleted one.
+            ImageCache.shared.removeAll()
+            Task {
+                await coordinator?.resetContinuity()
+                await queue?.wake()
+            }
+            historyChanged()
+            refreshQueue()
+            return result
+        } catch {
+            NSLog("Deleting screenshots failed: %@", error.localizedDescription)
+            return nil
+        }
+    }
+
     func deleteNote(id: Int64) {
         try? store?.deleteNote(id: id)
         historyChanged()
