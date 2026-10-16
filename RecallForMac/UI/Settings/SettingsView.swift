@@ -565,9 +565,17 @@ private struct GeneralSettings: View {
 
     var body: some View {
         Form {
-            Toggle("Open Recall at login", isOn: Binding(get: { state.launchAtLogin }, set: { state.setLaunchAtLogin($0) }))
-            LabeledContent("Pause/resume shortcut", value: GlobalHotKey.displayString)
-            Toggle("Show time zone in timestamps", isOn: $state.settings.showTimezone)
+            Section("Startup") {
+                Toggle("Open Recall at login", isOn: Binding(get: { state.launchAtLogin }, set: { state.setLaunchAtLogin($0) }))
+            }
+            Section {
+                LabeledContent("Pause or resume recording", value: GlobalHotKey.displayString)
+                LabeledContent("New note", value: GlobalHotKey.newNoteDisplayString)
+            } header: {
+                Text("Keyboard shortcuts")
+            } footer: {
+                Text("These work from any app.")
+            }
             UpdateSettingsSection()
             Section("Permissions") {
                 LabeledContent("Screen Recording") {

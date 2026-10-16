@@ -101,44 +101,43 @@ struct UpdateSettingsSection: View {
     @EnvironmentObject private var state: AppState
     @ObservedObject private var updates = UpdateController.shared
     @Environment(\.openWindow) private var openWindow
-    @State private var token = Keychain.get(.githubToken) ?? ""
-    @State private var tokenSaved = false
 
     var body: some View {
-        Section("Updates") {
-            Toggle("Check for updates automatically", isOn: $state.settings.automaticUpdateChecks)
+        Section {
             LabeledContent("Installed version", value: updates.currentVersion)
-            HStack {
-                Button("Check Now") { updates.check(userInitiated: true); activateApp(); openWindow(id: WindowID.update) }
-                    .disabled(updates.isBusy)
-                if updates.phase == .checking { ProgressView().controlSize(.small) }
-                Spacer()
-                Text(status).font(.caption).foregroundStyle(.secondary)
+            Toggle("Check for updates automatically", isOn: $state.settings.automaticUpdateChecks)
+            LabeledContent {
+                HStack(spacing: 8) {
+                    if updates.phase == .checking { ProgressView().controlSize(.small) }
+                    Button("Check Now") { updates.check(userInitiated: true); activateApp(); openWindow(id: WindowID.update) }
+                        .disabled(updates.isBusy)
+                }
+            } label: {
+                Text(status)
+                if case .failed(let message) = updates.phase {
+                    Text(message).foregroundStyle(.orange)
+                }
             }
             if case .ineligible(let reason) = updates.eligibility {
-                Text(reason + " You can still check and download updates.").font(.caption).foregroundStyle(.secondary)
+                Text(reason + " You can still check for and download updates.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
-            HStack {
-                SecureField("GitHub token (private repositories only)", text: $token)
-                Button(tokenSaved ? "Saved" : "Save") {
-                    Keychain.set(token.trimmingCharacters(in: .whitespacesAndNewlines), for: .githubToken)
-                    tokenSaved = true
-                }
-                .disabled(tokenSaved)
-            }
-            .onChange(of: token) { tokenSaved = false }
-            Text("Updates come from github.com/\(UpdateController.repository). Checks send only a request for the latest release. Downloads are installed only if they're signed by the same developer as this copy. A token is only needed while the repository is private; use a fine-grained token with read-only Contents access.")
-                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        } header: {
+            Text("Updates")
+        } footer: {
+            Text("Updates come from the public releases at github.com/\(UpdateController.repository). A check sends only a request for the latest release, and a download is installed only if it's signed by the same developer as this copy.")
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
     private var status: String {
         switch updates.phase {
         case .available(let r): return "Version \(r.version) is available"
-        case .failed(let m): return m
+        case .failed: return "The last check failed"
+        case .checking: return "Checking…"
         default:
-            guard let last = updates.lastChecked else { return "Never checked" }
-            return "Last checked \(last.formatted(.relative(presentation: .named)))"
+            guard let last = updates.lastChecked else { return "Not checked yet" }
+            return "Up to date · checked \(last.formatted(.relative(presentation: .named)))"
         }
     }
 }

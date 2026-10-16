@@ -10,8 +10,21 @@ public enum Keychain {
         case awsAccessKeyID = "bedrock.accessKeyID"
         case awsSecretAccessKey = "bedrock.secretAccessKey"
         case awsSessionToken = "bedrock.sessionToken"
-        /// Read-only token for checking releases of a private GitHub repository.
-        case githubToken = "github.token"
+    }
+
+    /// Items earlier versions stored and nothing reads any more: a GitHub token, needed only while the
+    /// repository was private.
+    static let retiredAccounts = ["github.token"]
+
+    /// Deletes retired items so no unused secret stays in the keychain.
+    public static func removeRetiredItems() {
+        for account in retiredAccounts {
+            SecItemDelete([
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecAttrAccount as String: account,
+            ] as CFDictionary)
+        }
     }
 
     static let service = "RecallForMac"

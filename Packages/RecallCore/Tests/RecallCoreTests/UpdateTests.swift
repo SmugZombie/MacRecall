@@ -63,7 +63,7 @@ func tempDir() throws -> URL {
         #expect(throws: UpdateError.self) { try GitHubReleaseClient.parse(Data(#"{"tag_name":"nightly","html_url":"https://x"}"#.utf8)) }
     }
 
-    @Test func tokenIsStrippedOnCrossHostRedirectAndHTTPIsRefused() {
+    @Test func credentialsAreStrippedOnCrossHostRedirectAndHTTPIsRefused() {
         var original = URLRequest(url: URL(string: "https://api.github.com/repos/o/r/releases/assets/1")!)
         original.setValue("Bearer secret", forHTTPHeaderField: "Authorization")
         var sameHost = original
@@ -167,49 +167,48 @@ extension ProviderTests {
 
     @Test func releaseClientHandlesResponses() async throws {
         MockURLProtocol.reset([(200, [:], releaseJSON("v1.0.2"))])
-        let client = GitHubReleaseClient(repository: "o/r", token: "tok", configuration: MockURLProtocol.configuration)
+        let client = GitHubReleaseClient(repository: "o/r", configuration: MockURLProtocol.configuration)
         let release = try await client.latestRelease()
         #expect(release.version == SemanticVersion("1.0.2"))
         let req = MockURLProtocol.captured[0].request
         #expect(req.url?.absoluteString == "https://api.github.com/repos/o/r/releases/latest")
-        #expect(req.value(forHTTPHeaderField: "Authorization") == "Bearer tok")
+        // The repository is public: no credentials are ever sent.
+        #expect(req.value(forHTTPHeaderField: "Authorization") == nil)
 
         MockURLProtocol.reset([(404, [:], ["message": "Not Found"])])
         await #expect(throws: UpdateError.notFound("o/r")) {
-            _ = try await GitHubReleaseClient(repository: "o/r", token: nil, configuration: MockURLProtocol.configuration).latestRelease()
+            _ = try await GitHubReleaseClient(repository: "o/r", configuration: MockURLProtocol.configuration).latestRelease()
         }
-        #expect(MockURLProtocol.captured[0].request.value(forHTTPHeaderField: "Authorization") == nil)
 
         MockURLProtocol.reset([(403, ["x-ratelimit-remaining": "0", "x-ratelimit-reset": "2000000000"], ["message": "rate limited"])])
         await #expect(throws: UpdateError.rateLimited(Date(timeIntervalSince1970: 2_000_000_000))) {
-            _ = try await GitHubReleaseClient(repository: "o/r", token: nil, configuration: MockURLProtocol.configuration).latestRelease()
+            _ = try await GitHubReleaseClient(repository: "o/r", configuration: MockURLProtocol.configuration).latestRelease()
+        }
+
+        MockURLProtocol.reset([(403, [:], ["message": "Forbidden"])])
+        await #expect(throws: UpdateError.http(403)) {
+            _ = try await GitHubReleaseClient(repository: "o/r", configuration: MockURLProtocol.configuration).latestRelease()
         }
     }
 
-    @Test func downloadUsesAPIURLWithTokenAndChecksSize() async throws {
-        let asset = ReleaseAsset(name: "RecallForMac-1.0.2.zip", apiURL: URL(string: "https://api.github.com/repos/o/r/releases/assets/9")!,
+    @Test func downloadUsesThePublicLinkAndChecksSize() async throws {
+        let asset = ReleaseAsset(name: "RecallForMac-1.0.2.zip",
                                  browserURL: URL(string: "https://github.com/o/r/releases/download/v1.0.2/RecallForMac-1.0.2.zip")!,
                                  size: 2, digest: nil)
         MockURLProtocol.responses = [(200, [:], Data([0x50, 0x4B]))]
         MockURLProtocol.captured = []
         let progress = ProgressBox()
-        let file = try await UpdateInstaller().download(asset, token: "tok", configuration: MockURLProtocol.configuration) { progress.value = $0 }
+        let file = try await UpdateInstaller().download(asset, configuration: MockURLProtocol.configuration) { progress.value = $0 }
         #expect(try Data(contentsOf: file) == Data([0x50, 0x4B]))
         #expect(progress.value == 1)
         let req = MockURLProtocol.captured[0].request
-        #expect(req.url == asset.apiURL && req.value(forHTTPHeaderField: "Accept") == "application/octet-stream")
-
-        // Without a token: the public download link, no Authorization header.
-        MockURLProtocol.responses = [(200, [:], Data([1, 2]))]
-        MockURLProtocol.captured = []
-        _ = try await UpdateInstaller().download(asset, token: nil, configuration: MockURLProtocol.configuration) { _ in }
-        #expect(MockURLProtocol.captured[0].request.url == asset.browserURL)
-        #expect(MockURLProtocol.captured[0].request.value(forHTTPHeaderField: "Authorization") == nil)
+        #expect(req.url == asset.browserURL)
+        #expect(req.value(forHTTPHeaderField: "Authorization") == nil)
 
         // A truncated download is rejected.
         MockURLProtocol.responses = [(200, [:], Data([1]))]
         await #expect(throws: UpdateError.self) {
-            _ = try await UpdateInstaller().download(asset, token: nil, configuration: MockURLProtocol.configuration) { _ in }
+            _ = try await UpdateInstaller().download(asset, configuration: MockURLProtocol.configuration) { _ in }
         }
     }
 }

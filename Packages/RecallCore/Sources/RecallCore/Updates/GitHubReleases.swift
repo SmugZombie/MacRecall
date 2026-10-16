@@ -2,8 +2,6 @@ import Foundation
 
 public struct ReleaseAsset: Sendable, Equatable {
     public var name: String
-    /// API URL; with `Accept: application/octet-stream` it serves the file (works for private repos with a token).
-    public var apiURL: URL
     public var browserURL: URL
     public var size: Int64
     /// e.g. "sha256:…", published by GitHub for release assets.
@@ -28,7 +26,6 @@ public struct AppRelease: Sendable, Equatable {
 
 public enum UpdateError: Error, LocalizedError, Sendable, Equatable {
     case notFound(String)
-    case unauthorized
     case rateLimited(Date?)
     case http(Int)
     case network(String)
@@ -42,8 +39,7 @@ public enum UpdateError: Error, LocalizedError, Sendable, Equatable {
     public var errorDescription: String? {
         switch self {
         case .notFound(let repo):
-            return "No published releases were found for \(repo). If the repository is private, add a GitHub token in Settings → General → Updates."
-        case .unauthorized: return "GitHub rejected the token. Check it in Settings → General → Updates."
+            return "No published releases were found for \(repo)."
         case .rateLimited(let reset):
             return "GitHub's rate limit was reached" + (reset.map { "; try again after \($0.formatted(date: .omitted, time: .shortened))" } ?? "") + "."
         case .http(let code): return "GitHub returned HTTP \(code)."
@@ -61,12 +57,10 @@ public enum UpdateError: Error, LocalizedError, Sendable, Equatable {
 /// Reads releases from the GitHub REST API. Sends no data beyond the request itself.
 public struct GitHubReleaseClient: Sendable {
     public var repository: String
-    public var token: String?
     let session: URLSession
 
-    public init(repository: String, token: String?, configuration: URLSessionConfiguration? = nil) {
+    public init(repository: String, configuration: URLSessionConfiguration? = nil) {
         self.repository = repository
-        self.token = (token?.isEmpty ?? true) ? nil : token
         let config = configuration ?? .ephemeral
         config.httpCookieStorage = nil
         config.urlCache = nil
@@ -80,7 +74,6 @@ public struct GitHubReleaseClient: Sendable {
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
         request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
-        if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
 
         let data: Data
         let response: URLResponse
@@ -88,14 +81,13 @@ public struct GitHubReleaseClient: Sendable {
         guard let http = response as? HTTPURLResponse else { throw UpdateError.malformed("not HTTP") }
         switch http.statusCode {
         case 200: return try Self.parse(data)
-        case 401: throw UpdateError.unauthorized
         case 404: throw UpdateError.notFound(repository)
         case 403, 429:
             if http.value(forHTTPHeaderField: "x-ratelimit-remaining") == "0" {
                 let reset = http.value(forHTTPHeaderField: "x-ratelimit-reset").flatMap(TimeInterval.init).map(Date.init(timeIntervalSince1970:))
                 throw UpdateError.rateLimited(reset)
             }
-            throw token == nil ? UpdateError.http(http.statusCode) : UpdateError.unauthorized
+            throw UpdateError.http(http.statusCode)
         default: throw UpdateError.http(http.statusCode)
         }
     }
@@ -113,9 +105,8 @@ public struct GitHubReleaseClient: Sendable {
         guard let page = (obj["html_url"] as? String).flatMap(URL.init(string:)) else { throw UpdateError.malformed("missing release URL") }
         let assets = (obj["assets"] as? [[String: Any]] ?? []).compactMap { a -> ReleaseAsset? in
             guard let name = a["name"] as? String,
-                  let api = (a["url"] as? String).flatMap(URL.init(string:)),
                   let browser = (a["browser_download_url"] as? String).flatMap(URL.init(string:)) else { return nil }
-            return ReleaseAsset(name: name, apiURL: api, browserURL: browser, size: (a["size"] as? NSNumber)?.int64Value ?? 0,
+            return ReleaseAsset(name: name, browserURL: browser, size: (a["size"] as? NSNumber)?.int64Value ?? 0,
                                 digest: a["digest"] as? String)
         }
         return AppRelease(

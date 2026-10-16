@@ -116,7 +116,7 @@ Recall checks GitHub Releases for this repository once a day (and from **Check f
 4. Verify its code signature against the running app's own Team ID and bundle identifier (`anchor apple generic and identifier … and certificate leaf[subject.OU] = <team>`). A build signed by anyone else is refused.
 5. Swap the bundle and relaunch.
 
-Self-update is disabled for development builds (DerivedData), unsigned or ad hoc builds, and install locations Recall can't write to. Those get a download link instead. Automatic checks can be turned off in Settings → General → Updates. A GitHub token there is only needed if you build from a private fork.
+Self-update is disabled for development builds (DerivedData), unsigned or ad hoc builds, and install locations Recall can't write to. Those get a download link instead. Automatic checks can be turned off in Settings → General → Updates.
 
 ## Architecture
 

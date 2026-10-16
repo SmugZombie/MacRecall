@@ -50,6 +50,7 @@ final class UpdateController: ObservableObject {
 
     /// Checks shortly after launch (if a day has passed) and then hourly for whether a day has passed.
     func start() {
+        Keychain.removeRetiredItems()
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { _ in
             MainActor.assumeIsolated { UpdateController.shared.checkIfDue() }
@@ -71,7 +72,7 @@ final class UpdateController: ObservableObject {
     func check(userInitiated: Bool) {
         guard !isBusy else { return }
         phase = .checking
-        let client = GitHubReleaseClient(repository: Self.repository, token: Keychain.get(.githubToken))
+        let client = GitHubReleaseClient(repository: Self.repository)
         work = Task {
             do {
                 let release = try await client.latestRelease()
@@ -113,11 +114,10 @@ final class UpdateController: ObservableObject {
         guard case .eligible = eligibility else { openReleasePage(release); return }
         guard let asset = release.asset else { phase = .failed(UpdateError.noAsset.localizedDescription); return }
         let env = environment
-        let token = Keychain.get(.githubToken)
         phase = .downloading(release, 0)
         work = Task {
             do {
-                let zip = try await UpdateInstaller().download(asset, token: token) { fraction in
+                let zip = try await UpdateInstaller().download(asset) { fraction in
                     Task { @MainActor in
                         if case .downloading(let r, _) = UpdateController.shared.phase {
                             UpdateController.shared.phase = .downloading(r, fraction)

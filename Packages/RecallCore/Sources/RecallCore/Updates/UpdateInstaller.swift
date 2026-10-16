@@ -61,21 +61,13 @@ public struct UpdateInstaller: Sendable {
     // MARK: Download
 
     /// Downloads the asset to a fresh temporary directory, reporting progress from 0 to 1.
-    public func download(_ asset: ReleaseAsset, token: String?, configuration: URLSessionConfiguration? = nil,
+    public func download(_ asset: ReleaseAsset, configuration: URLSessionConfiguration? = nil,
                          progress: @escaping @Sendable (Double) -> Void) async throws -> URL {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("RecallUpdate-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let destination = dir.appendingPathComponent(asset.name)
 
-        // Private repos need the API URL plus a token; public ones use the plain download link.
-        var request: URLRequest
-        if let token, !token.isEmpty {
-            request = URLRequest(url: asset.apiURL, timeoutInterval: 60)
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-            request.setValue("application/octet-stream", forHTTPHeaderField: "Accept")
-        } else {
-            request = URLRequest(url: asset.browserURL, timeoutInterval: 60)
-        }
+        var request = URLRequest(url: asset.browserURL, timeoutInterval: 60)
         request.setValue(GitHubReleaseClient.userAgent, forHTTPHeaderField: "User-Agent")
 
         let config = configuration ?? .ephemeral
@@ -94,7 +86,6 @@ public struct UpdateInstaller: Sendable {
         guard let http = response as? HTTPURLResponse else { throw UpdateError.malformed("not HTTP") }
         switch http.statusCode {
         case 200: break
-        case 401, 403: throw UpdateError.unauthorized
         case 404: throw UpdateError.noAsset
         default: throw UpdateError.http(http.statusCode)
         }
@@ -240,8 +231,8 @@ public struct UpdateInstaller: Sendable {
     }
 }
 
-/// GitHub serves private-repo assets via a redirect to a signed storage URL. The token must not
-/// travel to that other host, and downloads must stay on https.
+/// GitHub serves release downloads via a redirect to a signed storage URL. Downloads must stay on
+/// https, and no Authorization header travels to another host.
 final class DownloadRedirectGuard: NSObject, URLSessionTaskDelegate, Sendable {
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {

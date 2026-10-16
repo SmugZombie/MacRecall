@@ -54,7 +54,6 @@ public struct RecallSettings: Codable, Sendable, Equatable {
 
     // General
     public var notificationsEnabled = false
-    public var showTimezone = false
     public var onboardingCompleted = false
 
     public init() {}
@@ -139,7 +138,6 @@ public struct RecallSettings: Codable, Sendable, Equatable {
         mcpScreenshotsEnabled = v(.mcpScreenshotsEnabled, d.mcpScreenshotsEnabled)
         mcpAttachmentsEnabled = v(.mcpAttachmentsEnabled, d.mcpAttachmentsEnabled)
         notificationsEnabled = v(.notificationsEnabled, d.notificationsEnabled)
-        showTimezone = v(.showTimezone, d.showTimezone)
         onboardingCompleted = v(.onboardingCompleted, d.onboardingCompleted)
     }
 
