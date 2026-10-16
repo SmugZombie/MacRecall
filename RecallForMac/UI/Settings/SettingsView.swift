@@ -696,6 +696,10 @@ private struct MCPAccessSection: View {
                     Text("Allow agents to view screenshots")
                     Text("Agents can fetch a capture's screenshot (decrypted, downscaled). Images can show more than the redacted text, such as photos, other people's messages and anything OCR missed.")
                 }
+                Toggle(isOn: $state.settings.mcpAttachmentsEnabled) {
+                    Text("Allow agents to read note attachments")
+                    Text("Agents can fetch files you attached to notes: images, and the text of text, code, CSV, JSON and PDF files. Redaction doesn't apply to attachments; they're shared as you attached them.")
+                }
                 LabeledContent("Claude Code") {
                     HStack(alignment: .top) {
                         Text(claudeCodeCommand)
@@ -718,7 +722,7 @@ private struct MCPAccessSection: View {
                 Text("Last read by \(lastAccess.client) \(lastAccess.date.formatted(.relative(presentation: .named))).")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            Text("Lets MCP clients such as Claude Code, Claude Desktop or Cursor search your history and report on your usage: recognized text, AI descriptions, window titles, sessions, projects, summaries and app time. Access is read-only, and screenshots are shared only if you allow it above. Whatever an agent reads goes to its AI model, so it leaves this Mac if the agent uses a cloud model. Turning this off blocks agents immediately.")
+            Text("Lets MCP clients such as Claude Code, Claude Desktop or Cursor search your history and report on your usage: recognized text, AI descriptions, window titles, sessions, projects, summaries and app time. Access is read-only, and screenshots and note attachments are shared only if you allow them above. Whatever an agent reads goes to its AI model, so it leaves this Mac if the agent uses a cloud model. Turning this off blocks agents immediately.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
         .onAppear { lastAccess = MCPCommand.lastAccess() }

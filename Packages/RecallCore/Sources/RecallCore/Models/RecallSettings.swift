@@ -49,6 +49,8 @@ public struct RecallSettings: Codable, Sendable, Equatable {
     public var mcpEnabled = false
     /// Also lets them view screenshots (`get_screenshot`). Separate because images show more than redacted text.
     public var mcpScreenshotsEnabled = false
+    /// Also lets them read files attached to notes (`get_note_attachment`). Separate because attachments can be anything.
+    public var mcpAttachmentsEnabled = false
 
     // General
     public var notificationsEnabled = false
@@ -135,6 +137,7 @@ public struct RecallSettings: Codable, Sendable, Equatable {
         skippedUpdateVersion = v(.skippedUpdateVersion, d.skippedUpdateVersion)
         mcpEnabled = v(.mcpEnabled, d.mcpEnabled)
         mcpScreenshotsEnabled = v(.mcpScreenshotsEnabled, d.mcpScreenshotsEnabled)
+        mcpAttachmentsEnabled = v(.mcpAttachmentsEnabled, d.mcpAttachmentsEnabled)
         notificationsEnabled = v(.notificationsEnabled, d.notificationsEnabled)
         showTimezone = v(.showTimezone, d.showTimezone)
         onboardingCompleted = v(.onboardingCompleted, d.onboardingCompleted)

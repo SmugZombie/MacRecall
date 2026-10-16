@@ -97,10 +97,12 @@ The agent starts the app binary with `--mcp`. That process only opens the librar
 | `daily_summary` | The day's notes, time, projects, apps, sessions and errors seen on screen |
 | `list_projects` | Projects with aliases, repositories and recent time |
 | `list_notes` | Your notes in a time range (default the last 7 days), optionally matching a query or project |
-| `get_note` | One note's full text, time, project and attachment names; attachment contents aren't shared |
+| `get_note` | One note's full text, time, project and attachments (ids, names, types, sizes) |
+| `get_note_attachment` | An attached image, or the text of a text, code, CSV, JSON or PDF file, only if you've allowed it |
 
 - **Screenshots need a second opt-in.** Agents get text only until you also turn on **Allow agents to view screenshots**, which is off by default. Images can show more than the redacted text, such as photos, other people's messages and anything OCR missed. The `--mcp` process decrypts screenshots in memory with the same keychain key as the app.
-- Whatever the agent reads goes to its model, so it leaves your Mac if the agent uses a cloud model. Redaction applies to both, because sensitive text is removed (and blacked out in screenshots) before anything is stored.
+- **Note attachments need their own opt-in** too: **Allow agents to read note attachments**, off by default. Redaction rules don't apply to attachments, which are shared as you attached them. Other file types (archives, documents, media) are only listed.
+- Whatever the agent reads goes to its model, so it leaves your Mac if the agent uses a cloud model. Redaction covers text and screenshots, because sensitive text is removed (and blacked out in screenshots) before anything is stored.
 - Search is keyword-only and doesn't call your embedding provider. The agent does the reasoning itself.
 - Settings shows which client last read the history, and when.
 

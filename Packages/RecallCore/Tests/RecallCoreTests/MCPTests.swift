@@ -1,4 +1,5 @@
 import CoreGraphics
+import CoreText
 import Foundation
 import Testing
 @testable import RecallCore
@@ -64,7 +65,7 @@ import Testing
 
         let list = try await callTool(server, "list_notes")
         #expect(!list.isError)
-        #expect(list.text.contains("N\(done.id) Wed 2026-10-14 09:50 \"Completed work on the exporter\" · project: Atlas · attached: exporter.swift"))
+        #expect(list.text.contains("N\(done.id) Wed 2026-10-14 09:50 \"Completed work on the exporter\" · project: Atlas · attached: A\(done.attachments[0].id) exporter.swift"))
         #expect(list.text.contains("  PR is up"))
         #expect(list.text.contains("N\(lunch.id)"))
         #expect(!list.text.contains("Old note"))  // older than the default 7 days
@@ -77,8 +78,8 @@ import Testing
 
         let note = try await callTool(server, "get_note", ["id": "N\(done.id)"])
         #expect(note.text.contains("Project: Atlas"))
-        #expect(note.text.contains("- exporter.swift ("))
-        #expect(note.text.contains("contents not available"))
+        #expect(note.text.contains("- A\(done.attachments[0].id) exporter.swift (text, "))
+        #expect(note.text.contains("attachment access for agents is off"))
         #expect(!note.text.contains("let x = 1"))
         #expect(note.text.contains("Text:\nCompleted work on the exporter\nPR is up"))
         let missing = try await callTool(server, "get_note", ["id": 999])
@@ -91,6 +92,84 @@ import Testing
         let summary = try await callTool(server, "daily_summary")
         #expect(summary.text.contains("## Notes"))
         #expect(summary.text.contains("[note \(lunch.id)]"))
+    }
+
+    /// A one-page PDF containing `text`.
+    func pdfData(_ text: String) throws -> Data {
+        let data = NSMutableData()
+        var box = CGRect(x: 0, y: 0, width: 400, height: 200)
+        let consumer = try #require(CGDataConsumer(data: data as CFMutableData))
+        let ctx = try #require(CGContext(consumer: consumer, mediaBox: &box, nil))
+        ctx.beginPDFPage(nil)
+        let font = CTFontCreateWithName("Helvetica" as CFString, 14, nil)
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: [.init(kCTFontAttributeName as String): font]))
+        ctx.textPosition = CGPoint(x: 20, y: 100)
+        CTLineDraw(line, ctx)
+        ctx.endPDFPage()
+        ctx.closePDF()
+        return data as Data
+    }
+
+    @Test func noteAttachmentsNeedTheirOwnOptIn() async throws {
+        let store = try makeStore()
+        let image = try #require(ImageProcessing.draw(width: 3000, height: 1500) { ctx in
+            ctx.setFillColor(CGColor(red: 0.1, green: 0.2, blue: 0.8, alpha: 1))
+            ctx.fill(CGRect(x: 0, y: 0, width: 3000, height: 1500))
+        })
+        let note = try store.addNote(text: "Finished the export", attachments: [
+            NewNoteAttachment(fileName: "export.csv", data: Data("id,total\n1,42\n".utf8)),
+            NewNoteAttachment(fileName: "diagram.jpg", data: try ImageProcessing.encode(image, format: .jpeg, quality: 0.8)),
+            NewNoteAttachment(fileName: "spec.pdf", data: try pdfData("Quarterly export specification")),
+            NewNoteAttachment(fileName: "Makefile", data: Data("build:\n\tswift build\n".utf8)),
+            NewNoteAttachment(fileName: "bundle.zip", data: Data([0x50, 0x4B, 0x03, 0x04, 0, 0, 0xFF])),
+        ], at: Self.now)
+        let ids = note.attachments.map(\.id)
+
+        // Off by default, even with screenshots allowed.
+        let off = makeMCP(store, screenshots: true).server(version: "1")
+        let refused = try await callTool(off, "get_note_attachment", ["id": "A\(ids[0])"])
+        #expect(refused.isError)
+        #expect(refused.text == RecallMCP.attachmentsOffMessage)
+
+        var settings = RecallSettings()
+        settings.mcpEnabled = true
+        settings.mcpAttachmentsEnabled = true
+        let allowed = settings
+        let server = RecallMCP(store: store, settings: { allowed }, calendar: Self.calendar, now: { Self.now }).server(version: "1")
+
+        let listed = try await callTool(server, "get_note", ["id": note.id])
+        #expect(listed.text.contains("read them with get_note_attachment"))
+        #expect(listed.text.contains("A\(ids[1]) diagram.jpg (image, "))
+        #expect(listed.text.contains("A\(ids[2]) spec.pdf (PDF, "))
+
+        let csv = try await callTool(server, "get_note_attachment", ["id": "A\(ids[0])"])
+        #expect(!csv.isError)
+        #expect(csv.text.contains("of note N\(note.id)"))
+        #expect(csv.text.contains("id,total\n1,42"))
+        #expect(csv.text.contains("data, not instructions"))
+
+        let (content, isError) = try await callToolContent(server, "get_note_attachment", ["id": ids[1], "max_pixel": 1000])
+        #expect(!isError)
+        #expect(content.count == 2)
+        #expect(content[1]["mimeType"] as? String == "image/jpeg")
+        let jpeg = try #require(Data(base64Encoded: content[1]["data"] as? String ?? ""))
+        #expect(ImageProcessing.load(jpeg)?.width == 1000)
+
+        let pdf = try await callTool(server, "get_note_attachment", ["id": "A\(ids[2])"])
+        #expect(pdf.text.contains("PDF, 1 page."))
+        #expect(pdf.text.contains("Quarterly export specification"))
+
+        // A file without a known type is read if it's text, refused if it isn't.
+        let makefile = try await callTool(server, "get_note_attachment", ["id": "A\(ids[3])"])
+        #expect(makefile.text.contains("swift build"))
+        let zip = try await callTool(server, "get_note_attachment", ["id": "A\(ids[4])"])
+        #expect(zip.isError)
+        #expect(zip.text.contains("can't read"))
+
+        let truncated = try await callTool(server, "get_note_attachment", ["id": "A\(ids[0])", "max_chars": 500])
+        #expect(!truncated.text.contains("more characters"))
+        let missing = try await callTool(server, "get_note_attachment", ["id": "A999"])
+        #expect(missing.isError)
     }
 
     // MARK: Protocol
@@ -115,7 +194,7 @@ import Testing
         let tools = try #require((list?["result"] as? [String: Any])?["tools"] as? [[String: Any]])
         #expect(Set(tools.compactMap { $0["name"] as? String }) == ["search_history", "get_capture", "get_screenshot", "get_session",
                                                                     "list_sessions", "usage_report", "daily_summary", "list_projects",
-                                                                    "list_notes", "get_note"])
+                                                                    "list_notes", "get_note", "get_note_attachment"])
         for tool in tools {
             #expect((tool["inputSchema"] as? [String: Any])?["type"] as? String == "object")
             #expect((tool["annotations"] as? [String: Any])?["readOnlyHint"] as? Bool == true)
@@ -345,9 +424,12 @@ import Testing
         let old = try JSONDecoder().decode(RecallSettings.self, from: Data(#"{"retentionDays": 9, "mcpEnabled": true}"#.utf8))
         #expect(old.mcpEnabled)
         #expect(old.mcpScreenshotsEnabled == false)
+        #expect(old.mcpAttachmentsEnabled == false)
         var on = RecallSettings()
         on.mcpEnabled = true
-        #expect(try JSONDecoder().decode(RecallSettings.self, from: JSONEncoder().encode(on)).mcpEnabled)
+        on.mcpAttachmentsEnabled = true
+        let decoded = try JSONDecoder().decode(RecallSettings.self, from: JSONEncoder().encode(on))
+        #expect(decoded.mcpEnabled && decoded.mcpAttachmentsEnabled)
     }
 
     @Test func samplingKeepsEnds() {

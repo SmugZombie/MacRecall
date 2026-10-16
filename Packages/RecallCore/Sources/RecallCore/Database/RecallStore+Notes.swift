@@ -159,6 +159,10 @@ extension RecallStore {
         return try notes(sql: sql, params)
     }
 
+    public func noteAttachment(id: Int64) throws -> NoteAttachment? {
+        try db.queryOne("SELECT * FROM note_attachments WHERE id = ?", [id]).map(Self.attachment(from:))
+    }
+
     public func noteCount() throws -> Int {
         Int(try db.scalarInt("SELECT COUNT(*) FROM notes"))
     }
@@ -166,6 +170,12 @@ extension RecallStore {
     /// An attachment's contents, decrypted in memory.
     public func attachmentData(_ attachment: NoteAttachment) throws -> Data {
         try vault.read(attachment.path)
+    }
+
+    static func attachment(from row: Row) -> NoteAttachment {
+        NoteAttachment(id: row.int("id")!, noteID: row.int("note_id") ?? 0, fileName: row.string("file_name") ?? "",
+                       path: row.string("path") ?? "", contentType: row.string("content_type") ?? "",
+                       byteCount: row.int("byte_count") ?? 0, isImage: row.bool("is_image"))
     }
 
     private func notes(sql: String, _ params: [SQLBindable]) throws -> [NoteRecord] {
@@ -183,9 +193,7 @@ extension RecallStore {
             """, ids)
         var byNote: [Int64: [NoteAttachment]] = [:]
         for row in rows {
-            let a = NoteAttachment(id: row.int("id")!, noteID: row.int("note_id") ?? 0, fileName: row.string("file_name") ?? "",
-                                   path: row.string("path") ?? "", contentType: row.string("content_type") ?? "",
-                                   byteCount: row.int("byte_count") ?? 0, isImage: row.bool("is_image"))
+            let a = Self.attachment(from: row)
             byNote[a.noteID, default: []].append(a)
         }
         for i in notes.indices { notes[i].attachments = byNote[notes[i].id] ?? [] }
